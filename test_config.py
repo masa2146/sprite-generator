@@ -32,7 +32,7 @@ aspect_ratio = "3:4"
 [[assets]]
 id = "bg_sky"
 prompt = "seamless sky"
-trim = false
+cutout = false
 """
 
 MINIMAL_SPEC = """
@@ -69,8 +69,8 @@ def test_assets_parse_with_defaults_and_overrides():
     by_id = {a.id: a for a in pack.assets}
     assert by_id["btn_play"].aspect_ratio == "1:1"   # from [defaults]
     assert by_id["hero_idle"].aspect_ratio == "3:4"  # asset override
-    assert by_id["btn_play"].trim is True            # default
-    assert by_id["bg_sky"].trim is False             # asset override
+    assert by_id["btn_play"].cutout is True          # default
+    assert by_id["bg_sky"].cutout is False           # asset override
 
 
 def test_full_prompt_includes_prefix_asset_bg_clause_and_ratio():
@@ -82,6 +82,16 @@ def test_full_prompt_includes_prefix_asset_bg_clause_and_ratio():
     assert "round blue character" in text
     assert BG_CLAUSE in text
     assert text.endswith("aspect ratio 3:4")
+
+
+def test_cutout_false_prompt_has_no_magenta_clause():
+    _clear_env()
+    pack = load_pack(_write(FULL_SPEC))
+    sky = {a.id: a for a in pack.assets}["bg_sky"]
+    text = pack.full_prompt(sky)
+    assert "#FF00FF" not in text
+    assert BG_CLAUSE not in text
+    assert "seamless sky" in text
 
 
 def test_plate_prompt_also_carries_prefix_and_bg_clause():
@@ -182,7 +192,10 @@ def test_spec_with_no_assets_is_rejected():
 def test_seed_is_deterministic_across_processes():
     _clear_env()
     pack = load_pack(_write(FULL_SPEC))
-    # crc32 is stable; builtin hash() would not be
+    # crc32 is stable across processes; builtin hash() would not be — assert the
+    # literal value (computed via `python3 -c "import zlib; print(zlib.crc32(b'btn_play') % (2**31))"`)
+    # so a regression back to builtin hash() would actually be caught.
+    assert pack.seed_for("btn_play") == 414956289
     assert pack.seed_for("btn_play") == pack.seed_for("btn_play")
     assert pack.seed_for("btn_play") != pack.seed_for("hero_idle")
     assert 0 <= pack.seed_for("btn_play") < 2**31

@@ -2,6 +2,8 @@
 import base64
 import os
 
+import requests
+
 import orclient
 from config import Pack
 
@@ -89,6 +91,21 @@ def test_payload_with_reference_appends_base64_data_uri():
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"] == f"data:image/png;base64,{B64}"
     assert body["seed"] == 7
+
+
+def test_payload_declares_jpeg_mime_for_a_jpeg_reference():
+    jpeg = b"\xff\xd8\xff\xe0FAKEJPEGBYTES"
+    body = orclient.build_payload("m/model", "hello", reference_png=jpeg)
+    url = body["messages"][0]["content"][1]["image_url"]["url"]
+    assert url.startswith("data:image/jpeg;base64,")
+    assert base64.b64decode(url.split(",", 1)[1]) == jpeg
+
+
+def test_payload_declares_webp_mime_for_a_webp_reference():
+    webp = b"RIFF\x00\x00\x00\x00WEBPVP8 REST"
+    body = orclient.build_payload("m/model", "hello", reference_png=webp)
+    url = body["messages"][0]["content"][1]["image_url"]["url"]
+    assert url.startswith("data:image/webp;base64,")
 
 
 def test_headers_include_bearer_when_key_present():
@@ -201,6 +218,57 @@ def test_generate_backoff_is_two_four_seconds():
         orclient.requests.post = original
     assert len(rec.calls) == 3
     assert slept == [2, 4]  # no sleep after the final attempt
+
+
+def test_generate_retries_on_connection_error_then_succeeds():
+    """A timeout/connection reset raises before a status_code exists at all —
+    it must be retried like a 5xx, not propagate on the first attempt."""
+    events = [requests.exceptions.ConnectionError("boom"), _Resp(200, _ok_body())]
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        item = events.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    slept = []
+    original = orclient.requests.post
+    orclient.requests.post = fake_post
+    try:
+        png, cost, _raw = orclient.generate(_pack(), "p", sleeper=slept.append)
+    finally:
+        orclient.requests.post = original
+    assert png == PNG
+    assert slept == [2]
+
+
+def test_generate_gives_up_after_repeated_connection_errors():
+    events = [requests.exceptions.ConnectTimeout("timed out")] * 3
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        return_exc = events.pop(0)
+        raise return_exc
+
+    original = orclient.requests.post
+    orclient.requests.post = fake_post
+    try:
+        try:
+            orclient.generate(_pack(), "p", sleeper=lambda s: None)
+            raise AssertionError("expected ApiError")
+        except orclient.ApiError as exc:
+            assert "ConnectTimeout" in str(exc)
+    finally:
+        orclient.requests.post = original
+
+
+def test_generate_with_retries_zero_raises_api_error_not_type_error():
+    """last_error is still None if the loop body never runs; must not raise
+    TypeError('exceptions must derive from BaseException') from `raise None`."""
+    try:
+        orclient.generate(_pack(), "p", retries=0, sleeper=lambda s: None)
+        raise AssertionError("expected ApiError")
+    except orclient.ApiError:
+        pass
 
 
 def test_generate_does_not_retry_4xx_other_than_429():

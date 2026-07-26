@@ -1,7 +1,9 @@
 """Build orchestration tests. No network, no rembg. Run: python test_build.py"""
+import base64
 import json
 import os
 import tempfile
+import threading
 from io import BytesIO
 from pathlib import Path
 
@@ -9,6 +11,7 @@ from PIL import Image
 
 import gen
 import orclient
+import post
 from config import Asset, Pack
 
 
@@ -37,7 +40,7 @@ prompt = "coin icon"
 [[assets]]
 id = "bg_sky"
 prompt = "seamless sky"
-trim = false
+cutout = false
 """
 
 
@@ -49,12 +52,27 @@ def _spec_file(text=SPEC):
 
 
 class _Stubs:
-    """Replaces generate/cut_background/trim_and_pad for the duration of a test."""
+    """Replaces generate/cut_background/trim_and_pad for the duration of a test.
+
+    `outcomes` may be:
+      - a list: consumed positionally (pop(0), lock-protected). Fine when no
+        test assertion cares which asset got which outcome (e.g. plates, or
+        outcomes that are all interchangeable).
+      - a dict of {asset_id: outcome}: looked up by matching the seed passed
+        into generate() against pack.seed_for(id). build_one runs assets
+        concurrently under ThreadPoolExecutor, so which thread's fake_generate
+        call reaches a shared list first is scheduling-dependent — a plain
+        pop(0) cannot promise asset X gets outcome X. Use dict-mode whenever a
+        test asserts something id-specific.
+    """
 
     def __init__(self, outcomes):
-        self.outcomes = list(outcomes)  # each is (png, cost) or an Exception
+        self.outcomes = outcomes if isinstance(outcomes, dict) else list(outcomes)
+        self._lock = threading.Lock()
         self.prompts = []
         self.references = []
+        self.cut_calls = []   # bytes passed to post.cut_background, in call order
+        self.trim_calls = []  # images passed to post.trim_and_pad, in call order
 
     def __enter__(self):
         self._orig = (gen.orclient.generate, gen.post.cut_background, gen.post.trim_and_pad)
@@ -62,15 +80,29 @@ class _Stubs:
         def fake_generate(pack, prompt, reference_png=None, seed=None, **kw):
             self.prompts.append(prompt)
             self.references.append(reference_png)
-            outcome = self.outcomes.pop(0)
+            if isinstance(self.outcomes, dict):
+                outcome = next(
+                    v for aid, v in self.outcomes.items() if pack.seed_for(aid) == seed
+                )
+            else:
+                with self._lock:
+                    outcome = self.outcomes.pop(0)
             if isinstance(outcome, Exception):
                 raise outcome
             png, cost = outcome
             return png, cost, {"stub": True}
 
+        def fake_cut(data):
+            self.cut_calls.append(data)
+            return _Img(data)
+
+        def fake_trim(img, **kw):
+            self.trim_calls.append(img)
+            return _Img(img.data, trimmed=True)
+
         gen.orclient.generate = fake_generate
-        gen.post.cut_background = lambda data: _Img(data)
-        gen.post.trim_and_pad = lambda img, **kw: _Img(img.data, trimmed=True)
+        gen.post.cut_background = fake_cut
+        gen.post.trim_and_pad = fake_trim
         return self
 
     def __exit__(self, *exc):
@@ -162,20 +194,29 @@ def test_build_sends_style_bible_as_reference_on_every_request():
     assert stubs.references == [b"BIBLE", b"BIBLE", b"BIBLE"]
 
 
-def test_build_skips_trim_when_asset_sets_trim_false():
+def test_build_skips_cutout_pipeline_when_asset_sets_cutout_false():
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
-    with _Stubs([(b"A", 0.0), (b"B", 0.0), (b"C", 0.0)]):
+    outcomes = {"btn_play": (b"A", 0.0), "icon_coin": (b"B", 0.0), "bg_sky": (b"C", 0.0)}
+    with _Stubs(outcomes) as stubs:
         gen.main(["build", str(spec), "--out-root", tmp])
     out = Path(tmp) / "hc_v1"
     assert (out / "btn_play.png").read_bytes() == b"A-trimmed"
-    assert (out / "bg_sky.png").read_bytes() == b"C"  # trim = false
+    assert (out / "bg_sky.png").read_bytes() == b"C"  # cutout = false: saved raw
+    # cutout = false must skip both cut_background and trim_and_pad entirely,
+    # not just skip the trim step — only the two cutout=true assets call them.
+    assert len(stubs.cut_calls) == 2
+    assert len(stubs.trim_calls) == 2
 
 
 def test_one_failing_asset_does_not_stop_the_others():
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
-    outcomes = [(b"A", 0.04), orclient.ApiError("HTTP 429", 429), (b"C", 0.04)]
+    outcomes = {
+        "btn_play": (b"A", 0.04),
+        "icon_coin": orclient.ApiError("HTTP 429", 429),
+        "bg_sky": (b"C", 0.04),
+    }
     with _Stubs(outcomes):
         code = gen.main(["build", str(spec), "--out-root", tmp])
     assert code == 1  # non-zero because something failed
@@ -189,10 +230,11 @@ def test_one_failing_asset_does_not_stop_the_others():
 def test_missing_image_in_response_writes_error_json():
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
-    outcomes = [
-        orclient.ImageMissing({"choices": [{"message": {"content": "refused"}}]}),
-        (b"B", 0.0), (b"C", 0.0),
-    ]
+    outcomes = {
+        "btn_play": orclient.ImageMissing({"choices": [{"message": {"content": "refused"}}]}),
+        "icon_coin": (b"B", 0.0),
+        "bg_sky": (b"C", 0.0),
+    }
     with _Stubs(outcomes):
         gen.main(["build", str(spec), "--out-root", tmp])
     dumped = json.loads((Path(tmp) / "hc_v1" / "btn_play.error.json").read_text())
@@ -203,7 +245,8 @@ def test_post_processing_failure_keeps_the_raw_png():
     """A generated image is paid for; never throw it away."""
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
-    with _Stubs([(b"RAW", 0.04), (b"B", 0.0), (b"C", 0.0)]) as stubs:
+    outcomes = {"btn_play": (b"RAW", 0.04), "icon_coin": (b"B", 0.0), "bg_sky": (b"C", 0.0)}
+    with _Stubs(outcomes) as stubs:
         def boom(data):
             raise RuntimeError("shape error")
         gen.post.cut_background = boom
@@ -279,12 +322,63 @@ def test_missing_cost_disables_the_ceiling_and_warns_once():
     assert all(r["cost"] is None for r in _manifest(tmp, "hc_v1"))
 
 
+def test_mixed_cost_reporting_keeps_ceiling_enforced_via_estimate():
+    """One cost-less response must not permanently disable --max-cost — only a
+    provider that NEVER reports cost should. Force chunks of one (WORKERS=1) so
+    the mid-run behaviour is observable in order: a real cost, then a missing
+    one (charged at EST_COST), then the ceiling must still bite."""
+    tmp = tempfile.mkdtemp()
+    spec = _prepare(tmp)
+    original_workers = gen.WORKERS
+    gen.WORKERS = 1
+    try:
+        outcomes = [(b"A", 0.04), (b"B", None), (b"C", 0.04)]
+        with _Stubs(outcomes) as stubs:
+            code = gen.main(["build", str(spec), "--out-root", tmp, "--max-cost", "0.06"])
+    finally:
+        gen.WORKERS = original_workers
+    # 0.04 (real) + 0.04 (EST_COST estimate for the missing one) = 0.08 >= 0.06:
+    # the ceiling still stops the run, proving the latch didn't disable it.
+    assert len(stubs.prompts) == 2
+    assert code == 1
+
+
 def test_only_flag_limits_the_build_to_named_assets():
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
     with _Stubs([(b"A", 0.04)]) as stubs:
         gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
     assert len(stubs.prompts) == 1
+    assert [r["id"] for r in _manifest(tmp, "hc_v1")] == ["btn_play"]
+
+
+def test_only_run_preserves_other_ids_in_the_manifest():
+    """A full build then a `--only` follow-up must not truncate the manifest to
+    just the ids touched by the follow-up — that's the tool's own recommended
+    retry command, so losing provenance there is the normal recovery path."""
+    tmp = tempfile.mkdtemp()
+    spec = _prepare(tmp)
+    with _Stubs([(b"A", 0.04), (b"B", 0.04), (b"C", 0.04)]):
+        gen.main(["build", str(spec), "--out-root", tmp])
+    with _Stubs([(b"A2", 0.04)]):
+        code = gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+    assert code == 0
+    records = {r["id"]: r for r in _manifest(tmp, "hc_v1")}
+    assert set(records) == {"btn_play", "icon_coin", "bg_sky"}  # nothing dropped
+    assert records["btn_play"]["cost"] == 0.04  # replaced by this run
+    assert records["icon_coin"]["status"] == "ok"  # preserved from the prior run
+    assert records["bg_sky"]["status"] == "ok"
+
+
+def test_only_run_falls_back_gracefully_when_the_existing_manifest_is_corrupt():
+    tmp = tempfile.mkdtemp()
+    spec = _prepare(tmp)
+    manifest = Path(tmp) / "hc_v1" / "manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("{not valid json")
+    with _Stubs([(b"A", 0.04)]):
+        code = gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+    assert code == 0  # a corrupt existing manifest must not crash the run
     assert [r["id"] for r in _manifest(tmp, "hc_v1")] == ["btn_play"]
 
 
@@ -360,6 +454,37 @@ def test_init_respects_the_cost_ceiling():
     assert code == 0
 
 
+def test_init_survives_a_mid_sequence_plate_failure_and_stays_in_sync():
+    """Plate 1 fails (with a bare transport exception, proving cmd_init's except
+    arm also catches Exception, not just ApiError/ImageMissing). The surviving
+    files must be named contiguously (0.png, 1.png, ...) by position among
+    successes, not by loop index, and the contact sheet cell order must match —
+    otherwise the printed <0-N> hint and the sheet disagree with what's on disk."""
+    tmp = tempfile.mkdtemp()
+    spec = _spec_file()
+    outcomes = [(PLATES[0], 0.0), ConnectionError("boom"), (PLATES[2], 0.0), (PLATES[3], 0.0)]
+    with _Stubs(outcomes) as stubs:
+        code = gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+    assert code == 0
+    assert len(stubs.prompts) == 4  # all four plates were attempted
+
+    cand = Path(tmp) / "hc_v1" / "style_candidates"
+    assert sorted(p.name for p in cand.glob("*.png")) == [
+        "0.png", "1.png", "2.png", "contact_sheet.png",
+    ]  # contiguous: no gap left by the failed plate
+    assert (cand / "0.png").read_bytes() == PLATES[0]
+    assert (cand / "1.png").read_bytes() == PLATES[2]
+    assert (cand / "2.png").read_bytes() == PLATES[3]
+
+    # Cell order in the sheet must match file order: PLATES colors are
+    # (i*60, 0, 0), distinct enough to read back from the composed grid.
+    with Image.open(cand / "contact_sheet.png") as sheet:
+        cell_w, cell_h = sheet.width // 2, sheet.height // 2
+        assert sheet.getpixel((cell_w // 2, cell_h // 2))[:3] == (0, 0, 0)      # PLATES[0]
+        assert sheet.getpixel((cell_w + cell_w // 2, cell_h // 2))[:3] == (120, 0, 0)  # PLATES[2]
+        assert sheet.getpixel((cell_w // 2, cell_h + cell_h // 2))[:3] == (180, 0, 0)  # PLATES[3]
+
+
 def test_pick_copies_the_chosen_candidate_to_style_bible():
     tmp = tempfile.mkdtemp()
     spec = _spec_file()
@@ -418,6 +543,63 @@ def test_contact_sheet_handles_fewer_than_four_plates():
     sheet = gen.contact_sheet(paths, tmp / "sheet.png")
     with Image.open(sheet) as img:
         assert img.size == (200, 200)
+
+
+# --- real seam: orclient <-> gen -------------------------------------------
+
+def test_real_generate_and_trim_and_pad_run_end_to_end_through_build():
+    """Every other test in this file stubs orclient.generate directly, so
+    `fake_generate`'s hand-written signature is the only thing asserting the
+    orclient <-> gen contract — a real signature drift would sail through all
+    other tests untouched. This one stubs only requests.post (network) and
+    post.cut_background (avoids downloading rembg weights), and runs a real
+    `build --only` through the real config.load_pack, orclient.generate and
+    post.trim_and_pad."""
+    tmp = tempfile.mkdtemp()
+    spec = _prepare(tmp)
+
+    subject = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    subject.paste((200, 30, 30, 255), (10, 10, 30, 30))
+    buf = BytesIO()
+    subject.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode()
+
+    class _FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"images": [
+                    {"image_url": {"url": f"data:image/png;base64,{b64}"}}
+                ]}}],
+                "usage": {"cost": 0.04},
+            }
+
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(url)
+        return _FakeResp()
+
+    original_post = orclient.requests.post
+    original_cut = post.cut_background
+    orclient.requests.post = fake_post
+    # Real cut_background needs rembg weights; stand in with a plain decode so
+    # trim_and_pad (real, unstubbed) still has real alpha geometry to crop.
+    post.cut_background = lambda data: Image.open(BytesIO(data)).convert("RGBA")
+    try:
+        code = gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+    finally:
+        orclient.requests.post = original_post
+        post.cut_background = original_cut
+
+    assert code == 0
+    assert calls == ["http://svc/v1/chat/completions"]
+    out_png = Path(tmp) / "hc_v1" / "btn_play.png"
+    assert out_png.exists()
+    with Image.open(out_png) as img:
+        assert img.mode == "RGBA"
+        assert img.getpixel((0, 0))[3] == 0  # transparent corner survives trim/pad
 
 
 if __name__ == "__main__":
