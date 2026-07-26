@@ -1,0 +1,61 @@
+# Example pack: hyper-casual mobile game asset set.
+# Copy this file, change the ids and prompts, keep the structure.
+
+[api]
+base_url = "https://openrouter.ai/api/v1"
+key_env  = "OPENROUTER_API_KEY"
+# For a local OpenAI-compatible endpoint:
+#   base_url = "http://localhost:8080/v1"
+#   key_env  = ""              # empty means no Authorization header at all
+
+[pack]
+model = "google/gemini-3.1-flash-image"
+
+[style]
+# Prepended to every prompt, including the style plates.
+prefix = """
+hypercasual mobile game asset, soft 3D render look, glossy plastic material,
+rounded geometry, no outline, top-left key light, soft ambient occlusion,
+palette #FF6B4A #4ECDC4 #FFE66D #2C3E50
+"""
+# Shown once per style plate. Keep a UI element, an icon and a character in the
+# same frame — that is how you see whether the style holds across asset types.
+plate_prompt = "a play button, a coin icon, and a small round character, side by side"
+
+[defaults]
+aspect_ratio = "1:1"
+
+[[assets]]
+id     = "btn_play"
+prompt = "play button, rounded rectangle, white triangle glyph"
+
+[[assets]]
+id     = "btn_pause"
+prompt = "pause button, rounded rectangle, two white bars"
+
+[[assets]]
+id     = "icon_coin"
+prompt = "gold coin icon, front view, subtle shine"
+
+[[assets]]
+id     = "icon_star"
+prompt = "five-pointed star icon, filled, glossy"
+
+[[assets]]
+id     = "panel_frame"
+prompt = "rounded rectangular UI panel frame, empty center, soft border"
+
+[[assets]]
+id     = "hero_idle"
+prompt = "small round blue character, idle pose, front view, big friendly eyes"
+aspect_ratio = "3:4"
+
+[[assets]]
+id     = "obstacle_block"
+prompt = "cube-shaped obstacle block, chunky, beveled edges"
+
+[[assets]]
+id     = "bg_sky"
+prompt = "seamless pastel sky gradient with soft rounded clouds"
+aspect_ratio = "9:16"
+trim   = false
