@@ -60,8 +60,12 @@ def build_one(pack, asset, reference_png):
             seed=pack.seed_for(asset.id),
         )
     except orclient.ImageMissing as exc:
-        (out_dir / f"{asset.id}.error.json").write_text(json.dumps(exc.raw, indent=2))
-        return _record(pack, asset, "failed", error=f"no image in response (see {asset.id}.error.json)")
+        try:
+            (out_dir / f"{asset.id}.error.json").write_text(json.dumps(exc.raw, indent=2))
+            note = f" (see {asset.id}.error.json)"
+        except Exception as write_exc:
+            note = f" (also failed to write {asset.id}.error.json: {write_exc})"
+        return _record(pack, asset, "failed", error=f"no image in response{note}")
     except orclient.ApiError as exc:
         return _record(pack, asset, "failed", error=str(exc))
     except Exception as exc:  # transport-level surprises: connection reset, DNS, ...
@@ -76,9 +80,13 @@ def build_one(pack, asset, reference_png):
         target = out_dir / f"{asset.id}.png"
         img.save(target)
     except Exception as exc:
-        (out_dir / f"{asset.id}.raw.png").write_bytes(png)
+        try:
+            (out_dir / f"{asset.id}.raw.png").write_bytes(png)
+            note = f" (raw kept as {asset.id}.raw.png)"
+        except Exception as write_exc:
+            note = f" (also failed to keep raw png: {write_exc})"
         return _record(pack, asset, "failed", cost=cost,
-                       error=f"post-processing: {exc} (raw kept as {asset.id}.raw.png)")
+                       error=f"post-processing: {exc}{note}")
 
     return _record(pack, asset, "ok", cost=cost, file=str(target))
 
@@ -137,8 +145,18 @@ def cmd_build(args):
             stopped_early = True
             break
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-            futures = [pool.submit(build_one, pack, a, reference) for a in chunk]
-            chunk_records = [f.result() for f in futures]
+            futures = [(a, pool.submit(build_one, pack, a, reference)) for a in chunk]
+            # build_one's contract is "never raises," but this is defence in depth:
+            # if it somehow does, that asset degrades to a failed record instead of
+            # taking down the whole batch.
+            chunk_records = []
+            for asset, fut in futures:
+                try:
+                    chunk_records.append(fut.result())
+                except Exception as exc:
+                    chunk_records.append(
+                        _record(pack, asset, "failed", error=f"internal error: {exc}")
+                    )
         for rec in chunk_records:
             records.append(rec)
             print(f"[{rec['id']:<16}] {rec['status']}"
@@ -151,7 +169,12 @@ def cmd_build(args):
             elif rec["cost"]:
                 spent += rec["cost"]
 
-    pack.manifest_path.write_text(json.dumps(records, indent=2))
+    manifest_ok = True
+    try:
+        pack.manifest_path.write_text(json.dumps(records, indent=2))
+    except Exception as exc:
+        manifest_ok = False
+        print(f"error: failed to write manifest: {exc}", file=sys.stderr)
 
     ok = sum(1 for r in records if r["status"] == "ok")
     failed = [r for r in records if r["status"] == "failed"]
@@ -164,7 +187,10 @@ def cmd_build(args):
         print("failed: " + ", ".join(f"{r['id']} ({r['error']})" for r in failed))
         print(f"retry: python gen.py build {args.spec} --only "
               + ",".join(r["id"] for r in failed))
-    return 0 if not failed else 1
+    # A truncated run (cost ceiling hit) or a failed manifest write means the batch
+    # is incomplete or unrecorded, even if every asset that did run succeeded — a
+    # caller chaining `&& upload` must not treat that as a clean success.
+    return 1 if (failed or stopped_early or not manifest_ok) else 0
 
 
 def _add_common(sub):

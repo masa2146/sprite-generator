@@ -9,7 +9,7 @@ from PIL import Image
 
 import gen
 import orclient
-from config import Asset
+from config import Asset, Pack
 
 
 def _png(color=(10, 20, 30)):
@@ -214,6 +214,26 @@ def test_post_processing_failure_keeps_the_raw_png():
     assert "shape error" in records["btn_play"]["error"]
 
 
+def test_error_json_write_failure_still_yields_a_failed_record():
+    """Finding 1: if writing {id}.error.json itself fails, build_one must still
+    return a failed record instead of letting the exception escape the batch."""
+    tmp = tempfile.mkdtemp()
+    pack = Pack(
+        name="t", base_url="http://svc/v1", key_env="", model="m/model",
+        style_prefix="styled", plate_prompt="plate",
+        assets=[], out_root=Path(tmp),
+    )
+    pack.out_dir.mkdir(parents=True, exist_ok=True)
+    # "/" in the id makes out_dir / f"{id}.error.json" address a subdirectory that
+    # was never created, so the write raises FileNotFoundError.
+    asset = Asset(id="bad/nested", prompt="p")
+    with _Stubs([orclient.ImageMissing({"choices": []})]):
+        rec = gen.build_one(pack, asset, b"BIBLE")
+    assert rec["status"] == "failed"
+    assert "no image in response" in rec["error"]
+    assert "failed to write" in rec["error"]
+
+
 def test_budget_ceiling_stops_before_the_next_request():
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
@@ -223,12 +243,13 @@ def test_budget_ceiling_stops_before_the_next_request():
     gen.WORKERS = 1
     try:
         with _Stubs([(b"A", 0.04), (b"B", 0.04), (b"C", 0.04)]) as stubs:
-            gen.main(["build", str(spec), "--out-root", tmp, "--max-cost", "0.05"])
+            code = gen.main(["build", str(spec), "--out-root", tmp, "--max-cost", "0.05"])
     finally:
         gen.WORKERS = original_workers
     assert len(stubs.prompts) == 2  # spent 0.08 after two, third never requested
     records = _manifest(tmp, "hc_v1")
     assert len(records) == 2  # manifest still written for what did run
+    assert code == 1  # truncated run is not a clean success, even with 0 failures
 
 
 def test_missing_api_key_exits_before_any_request():
