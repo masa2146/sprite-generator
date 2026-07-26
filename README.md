@@ -63,6 +63,11 @@ transparency, they tend to *paint* a checkerboard. So every prompt requests a fl
 `#FF00FF` background and alpha is cut locally with rembg. Edge quality comes from
 that clause, not from the model.
 
+This only applies to assets that *have* a subject to isolate. Set `cutout = false`
+on an asset that IS the whole image — a full-bleed background, a seamless tile —
+and the magenta clause, background removal, and trim/pad are all skipped; the
+model's output is saved as-is. `cutout` defaults to `true`.
+
 ## Unity import
 
 Set on each imported sprite: Texture Type `Sprite (2D and UI)`, `Alpha Is

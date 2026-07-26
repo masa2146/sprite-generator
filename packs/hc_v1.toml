@@ -58,4 +58,6 @@ prompt = "cube-shaped obstacle block, chunky, beveled edges"
 id     = "bg_sky"
 prompt = "seamless pastel sky gradient with soft rounded clouds"
 aspect_ratio = "9:16"
-trim   = false
+# This asset IS the whole image, not a sprite with a subject to cut out — a
+# full-bleed background has nothing to isolate on magenta and nothing to trim.
+cutout = false

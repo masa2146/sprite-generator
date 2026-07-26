@@ -25,7 +25,7 @@ class Asset:
     id: str
     prompt: str
     aspect_ratio: str = "1:1"
-    trim: bool = True
+    cutout: bool = True  # sprite-with-subject vs. whole-image (background/tile)
 
 
 @dataclass
@@ -60,10 +60,15 @@ class Pack:
         return os.environ.get(self.key_env) if self.key_env else None
 
     def full_prompt(self, asset: Asset) -> str:
-        return (
-            f"{self.style_prefix.strip()} {asset.prompt.strip()} "
-            f"{BG_CLAUSE}, aspect ratio {asset.aspect_ratio}"
-        )
+        prefix = self.style_prefix.strip()
+        body = asset.prompt.strip()
+        if asset.cutout:
+            # This asset is a sprite with a subject: ask for a flat backdrop so
+            # it can be cut out locally (see BG_CLAUSE).
+            return f"{prefix} {body} {BG_CLAUSE}, aspect ratio {asset.aspect_ratio}"
+        # This asset IS the whole image (a background, a seamless tile) — there
+        # is nothing to isolate, so no magenta clause and no cutout later.
+        return f"{prefix} {body}, aspect ratio {asset.aspect_ratio}"
 
     def plate_full_prompt(self) -> str:
         return f"{self.style_prefix.strip()} {self.plate_prompt.strip()} {BG_CLAUSE}"
@@ -122,7 +127,7 @@ def load_pack(
                 id=row["id"],
                 prompt=row["prompt"],
                 aspect_ratio=row.get("aspect_ratio", default_ratio),
-                trim=row.get("trim", True),
+                cutout=row.get("cutout", True),
             )
         )
     if not assets:
