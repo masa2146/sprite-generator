@@ -53,6 +53,7 @@ class Pack:
     assets: list[Asset] = field(default_factory=list)
     out_root: Path = Path("out")
     transport: str = DEFAULT_TRANSPORT
+    default_aspect_ratio: str = "1:1"  # [defaults] aspect_ratio — style plates use this
 
     @property
     def out_dir(self) -> Path:
@@ -142,7 +143,11 @@ def load_pack(
 
     # key_env may be explicitly "" to mean "this endpoint needs no key".
     key_env = api["key_env"] if "key_env" in api else DEFAULT_KEY_ENV
-    if key_env and (key_env.startswith("sk-") or not _VALID_ENV_NAME.fullmatch(key_env)):
+    if key_env and (
+        not isinstance(key_env, str)
+        or key_env.startswith("sk-")
+        or not _VALID_ENV_NAME.fullmatch(key_env)
+    ):
         raise SpecError(
             f"key_env looks like a credential value, not an environment variable "
             f"name: {key_env!r}. key_env takes the NAME of an env var that holds "
@@ -181,4 +186,5 @@ def load_pack(
         assets=assets,
         out_root=Path(out_root),
         transport=resolved_transport,
+        default_aspect_ratio=default_ratio,
     )

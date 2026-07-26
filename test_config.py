@@ -195,6 +195,19 @@ def test_key_env_rejects_a_value_with_characters_no_env_name_may_have():
         assert "key_env" in str(e)
 
 
+def test_key_env_rejects_a_non_string_value():
+    """Finding 8: key_env = 42 used to crash with AttributeError ('int' object
+    has no attribute 'startswith') instead of a clean SpecError — and cmd_build
+    only catches SpecError, so this would have surfaced as a raw traceback."""
+    _clear_env()
+    bad = _write(MINIMAL_SPEC.replace("[pack]", '[api]\nkey_env = 42\n[pack]'))
+    try:
+        load_pack(bad)
+        raise AssertionError("expected SpecError")
+    except SpecError as e:
+        assert "key_env" in str(e)
+
+
 def test_api_key_read_from_named_env_var_only():
     _clear_env()
     pack = load_pack(_write(FULL_SPEC))

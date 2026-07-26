@@ -65,5 +65,5 @@ id     = "bg_sky"
 prompt = "seamless pastel sky gradient with soft rounded clouds"
 aspect_ratio = "9:16"
 # This asset IS the whole image, not a sprite with a subject to cut out — a
-# full-bleed background has nothing to isolate on magenta and nothing to trim.
+# full-bleed background has nothing to isolate on a backdrop and nothing to trim.
 cutout = false

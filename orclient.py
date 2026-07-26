@@ -38,6 +38,13 @@ def _b64(s) -> bytes | None:
         return None
 
 
+def chat_prompt_with_ratio(prompt: str, aspect_ratio: str | None) -> str:
+    """The chat transport has no structured field for aspect ratio, so it gets
+    appended to the prompt text. Shared with gen.py's --dry-run so the dry-run
+    output matches what generate() actually sends."""
+    return f"{prompt}, aspect ratio {aspect_ratio}" if aspect_ratio else prompt
+
+
 class ApiError(Exception):
     """The endpoint returned a non-200 status."""
 
@@ -209,8 +216,9 @@ def generate(
         parse = parse_image_images
     else:
         url = pack.base_url.rstrip("/") + "/chat/completions"
-        chat_prompt = f"{prompt}, aspect ratio {aspect_ratio}" if aspect_ratio else prompt
-        payload = build_payload(pack.model, chat_prompt, reference_png, seed)
+        payload = build_payload(
+            pack.model, chat_prompt_with_ratio(prompt, aspect_ratio), reference_png, seed
+        )
         parse = parse_image
 
     last_error: ApiError | None = None

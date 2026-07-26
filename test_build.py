@@ -4,7 +4,8 @@ import json
 import os
 import tempfile
 import threading
-from io import BytesIO
+from contextlib import redirect_stdout
+from io import BytesIO, StringIO
 from pathlib import Path
 
 from PIL import Image
@@ -72,15 +73,17 @@ class _Stubs:
         self._lock = threading.Lock()
         self.prompts = []
         self.references = []
+        self.aspect_ratios = []  # aspect_ratio passed into generate(), in call order
         self.cut_calls = []   # bytes passed to post.cut_background, in call order
         self.trim_calls = []  # images passed to post.trim_and_pad, in call order
 
     def __enter__(self):
         self._orig = (gen.orclient.generate, gen.post.cut_background, gen.post.trim_and_pad)
 
-        def fake_generate(pack, prompt, reference_png=None, seed=None, **kw):
+        def fake_generate(pack, prompt, aspect_ratio=None, reference_png=None, seed=None, **kw):
             self.prompts.append(prompt)
             self.references.append(reference_png)
+            self.aspect_ratios.append(aspect_ratio)
             if isinstance(self.outcomes, dict):
                 outcome = next(
                     v for aid, v in self.outcomes.items() if pack.seed_for(aid) == seed
@@ -155,6 +158,32 @@ def test_dry_run_works_without_a_style_bible():
         assert gen.main(["build", str(spec), "--dry-run"]) == 0
 
 
+def test_dry_run_shows_the_chat_transports_wire_prompt():
+    """Finding 5: under transport = "chat" the wire prompt has ", aspect ratio
+    N:M" appended (orclient.generate does this before posting) — --dry-run must
+    show that, not just the bare prompt text, or the printed preview lies about
+    what will actually be sent."""
+    spec = _spec_file()  # SPEC's [api] transport = "chat"
+    with _Stubs([]):
+        buf = StringIO()
+        with redirect_stdout(buf):
+            gen.main(["build", str(spec), "--dry-run"])
+    assert "aspect ratio 1:1" in buf.getvalue()
+
+
+def test_dry_run_shows_the_images_transports_structured_aspect_ratio():
+    """Under transport = "images" aspect_ratio is a separate JSON field, never
+    appended to the prompt text — the dry-run preview must reflect that."""
+    spec = _spec_file(SPEC.replace('transport = "chat"', 'transport = "images"'))
+    with _Stubs([]):
+        buf = StringIO()
+        with redirect_stdout(buf):
+            gen.main(["build", str(spec), "--dry-run"])
+    out = buf.getvalue()
+    assert "aspect_ratio=1:1" in out
+    assert "aspect ratio 1:1" not in out
+
+
 def test_build_without_style_bible_exits_with_error():
     spec = _spec_file()
     tmp = tempfile.mkdtemp()
@@ -175,7 +204,7 @@ def _prepare(tmp, spec_text=SPEC):
 def test_build_writes_png_per_asset_and_a_manifest():
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
-    with _Stubs([(b"A", 0.04), (b"B", 0.04), (b"C", 0.04)]):
+    with _Stubs([(b"A", 0.04), (b"B", 0.04), (b"C", 0.04)]) as stubs:
         code = gen.main(["build", str(spec), "--out-root", tmp])
     assert code == 0
     out = Path(tmp) / "hc_v1"
@@ -185,6 +214,10 @@ def test_build_writes_png_per_asset_and_a_manifest():
     assert [r["id"] for r in records] == ["btn_play", "icon_coin", "bg_sky"]
     assert all(r["status"] == "ok" for r in records)
     assert all(r["cost"] == 0.04 for r in records)
+    # Every asset in SPEC has aspect_ratio "1:1" (no [defaults] override, no
+    # per-asset override) — proves build_one actually threads asset.aspect_ratio
+    # into generate() rather than dropping it silently.
+    assert stubs.aspect_ratios == ["1:1", "1:1", "1:1"]
 
 
 def test_build_sends_style_bible_as_reference_on_every_request():
@@ -389,10 +422,13 @@ def test_manifest_records_carry_full_provenance():
     with _Stubs([(b"A", 0.04), (b"B", 0.04), (b"C", 0.04)]):
         gen.main(["build", str(spec), "--out-root", tmp])
     rec = _manifest(tmp, "hc_v1")[0]
-    for key in ("id", "status", "prompt", "model", "base_url", "seed", "cost", "file", "error"):
+    for key in ("id", "status", "prompt", "model", "base_url", "transport",
+                "aspect_ratio", "seed", "cost", "file", "error"):
         assert key in rec, key
     assert rec["model"] == "m/model"
     assert rec["base_url"] == "http://svc/v1"
+    assert rec["transport"] == "chat"  # SPEC's [api] transport
+    assert rec["aspect_ratio"] == "1:1"
     assert "play button" in rec["prompt"]
     assert "#808080" in rec["prompt"]  # BG_CLAUSE made it in
 
@@ -434,6 +470,19 @@ def test_init_sends_no_reference_and_uses_the_plate_prompt():
     assert stubs.references == [None, None, None, None]
     assert all("a button, an icon, a character" in p for p in stubs.prompts)
     assert all("#808080" in p for p in stubs.prompts)
+    assert stubs.aspect_ratios == ["1:1", "1:1", "1:1", "1:1"]  # SPEC has no [defaults]
+
+
+def test_init_uses_the_packs_default_aspect_ratio_not_hardcoded_1_1():
+    """Finding 6: cmd_init used to hardcode aspect_ratio="1:1" for every plate,
+    regardless of what the pack's own [defaults] said. A pack whose defaults
+    are 9:16 would get a square style bible used as the reference for
+    non-square assets."""
+    tmp = tempfile.mkdtemp()
+    spec = _spec_file(SPEC.replace("[style]", '[defaults]\naspect_ratio = "9:16"\n[style]'))
+    with _Stubs(_plate_outcomes()) as stubs:
+        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+    assert stubs.aspect_ratios == ["9:16", "9:16", "9:16", "9:16"]
 
 
 def test_init_plates_are_saved_raw_without_background_removal():
@@ -596,6 +645,82 @@ def test_real_generate_and_trim_and_pad_run_end_to_end_through_build():
 
     assert code == 0
     assert calls == ["http://svc/v1/chat/completions"]
+    out_png = Path(tmp) / "hc_v1" / "btn_play.png"
+    assert out_png.exists()
+    with Image.open(out_png) as img:
+        assert img.mode == "RGBA"
+        assert img.getpixel((0, 0))[3] == 0  # transparent corner survives trim/pad
+
+
+SPEC_IMAGES = """
+[api]
+base_url = "http://svc/v1"
+key_env = ""
+transport = "images"
+[pack]
+model = "m/model"
+[style]
+prefix = "styled"
+plate_prompt = "a button, an icon, a character"
+[[assets]]
+id = "btn_play"
+prompt = "play button"
+aspect_ratio = "3:4"
+[[assets]]
+id = "icon_coin"
+prompt = "coin icon"
+[[assets]]
+id = "bg_sky"
+prompt = "seamless sky"
+cutout = false
+"""
+
+
+def test_real_generate_through_build_on_images_transport_posts_aspect_ratio():
+    """Finding 2: the images transport is the default real users get, and
+    aspect_ratio wiring through gen.py had zero coverage on it — every other
+    test in this file stubs orclient.generate directly, and the one real-seam
+    test (above) only exercises transport = "chat". Mirrors that test but on
+    the images transport, with an images-shaped fake response, and asserts the
+    posted URL is .../images and the posted JSON's aspect_ratio equals the
+    asset's ratio — the thing a mutation that deletes
+    `aspect_ratio=asset.aspect_ratio` from build_one must break."""
+    tmp = tempfile.mkdtemp()
+    spec = _prepare(tmp, SPEC_IMAGES)
+
+    subject = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    subject.paste((200, 30, 30, 255), (10, 10, 30, 30))
+    buf = BytesIO()
+    subject.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode()
+
+    class _FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"b64_json": b64}], "usage": {"cost": 0.04}}
+
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append((url, json))
+        return _FakeResp()
+
+    original_post = orclient.requests.post
+    original_cut = post.cut_background
+    orclient.requests.post = fake_post
+    post.cut_background = lambda data: Image.open(BytesIO(data)).convert("RGBA")
+    try:
+        code = gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+    finally:
+        orclient.requests.post = original_post
+        post.cut_background = original_cut
+
+    assert code == 0
+    assert len(calls) == 1
+    url, posted_json = calls[0]
+    assert url == "http://svc/v1/images"
+    assert posted_json["aspect_ratio"] == "3:4"  # btn_play's own aspect_ratio
     out_png = Path(tmp) / "hc_v1" / "btn_play.png"
     assert out_png.exists()
     with Image.open(out_png) as img:

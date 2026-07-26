@@ -47,6 +47,8 @@ def _record(pack, asset, status, cost=None, file=None, error=None):
         "prompt": pack.full_prompt(asset),
         "model": pack.model,
         "base_url": pack.base_url,
+        "transport": pack.transport,
+        "aspect_ratio": asset.aspect_ratio,
         "seed": pack.seed_for(asset.id),
         "cost": cost,
         "file": file,
@@ -151,7 +153,16 @@ def cmd_build(args):
 
     if args.dry_run:
         for asset in targets:
-            print(f"[{asset.id}] {pack.full_prompt(asset)}")
+            # Show what will actually go on the wire, which differs by transport:
+            # chat has no structured aspect_ratio field so it's appended to the
+            # prompt text; images sends it as a separate JSON field.
+            if pack.transport == "images":
+                print(f"[{asset.id}] {pack.full_prompt(asset)}  (aspect_ratio={asset.aspect_ratio})")
+            else:
+                wire_prompt = orclient.chat_prompt_with_ratio(
+                    pack.full_prompt(asset), asset.aspect_ratio
+                )
+                print(f"[{asset.id}] {wire_prompt}")
         print(f"\n{len(targets)} assets, est. ${len(targets) * EST_COST:.2f}")
         return 0
 
@@ -279,7 +290,12 @@ def cmd_init(args):
             break
         try:
             # Plates carry no reference image: this is where the style is born.
-            png, cost, _raw = orclient.generate(pack, prompt, aspect_ratio="1:1", seed=i)
+            # Use the pack's own default ratio, not a hardcoded "1:1" — a pack
+            # whose defaults are e.g. 9:16 must not get a square style bible
+            # used as the reference for non-square assets.
+            png, cost, _raw = orclient.generate(
+                pack, prompt, aspect_ratio=pack.default_aspect_ratio, seed=i
+            )
         except (orclient.ApiError, orclient.ImageMissing) as exc:
             print(f"[plate {i}] failed — {exc}", file=sys.stderr)
             continue
@@ -337,7 +353,7 @@ def _add_common(sub):
     sub.add_argument("spec")
     sub.add_argument("--base-url", default=None, help="override [api] base_url")
     sub.add_argument("--model", default=None, help="override [pack] model")
-    sub.add_argument("--transport", default=None, choices=("images", "chat"),
+    sub.add_argument("--transport", default=None, choices=config.VALID_TRANSPORTS,
                       help="override [api] transport")
     sub.add_argument("--out-root", default="out", help="root output directory")
 
