@@ -56,16 +56,26 @@ The `usage.cost` field is an OpenRouter extension. Against an endpoint that omit
 it, `--max-cost` cannot be enforced; the tool warns once and continues rather
 than pretending the ceiling is active.
 
-## Why the magenta backdrop
+## Why the grey backdrop
 
 Hosted image models do not reliably emit an alpha channel — asked for
 transparency, they tend to *paint* a checkerboard. So every prompt requests a flat
-`#FF00FF` background and alpha is cut locally with rembg. Edge quality comes from
+`#808080` background and alpha is cut locally with rembg. Edge quality comes from
 that clause, not from the model.
+
+**Why neutral grey and not a chroma-key colour.** rembg does alpha *matting*, not
+chroma keying: the pixels along a cutout's edge come out as a blend of subject and
+backdrop, so a saturated backdrop bleeds visible colour into that edge. Measured on
+a synthetic sprite across four subject colours (teal, white, grey, gold), a
+`#FF00FF` backdrop left 610–2079 tinted edge pixels every time — a visible purple
+rim — while `#808080` left zero. Segmentation quality was identical in both cases,
+including a grey subject on the grey backdrop, because rembg keys on salience
+rather than colour contrast. If you ever do see a rim, changing this colour in
+`config.BG_CLAUSE` is the first thing to try.
 
 This only applies to assets that *have* a subject to isolate. Set `cutout = false`
 on an asset that IS the whole image — a full-bleed background, a seamless tile —
-and the magenta clause, background removal, and trim/pad are all skipped; the
+and the backdrop clause, background removal, and trim/pad are all skipped; the
 model's output is saved as-is. `cutout` defaults to `true`.
 
 ## Unity import

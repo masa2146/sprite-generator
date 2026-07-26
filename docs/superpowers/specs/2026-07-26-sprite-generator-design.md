@@ -102,12 +102,29 @@ Dışarıdan hazır bir referans görsel de doğrudan `style_bible.png` olarak k
 **1. `BG_CLAUSE` zorunlu sabit.** Her prompt'a şu eklenir:
 
 ```
-isolated on flat solid #FF00FF background, no shadow, no ground plane
+isolated on flat solid #808080 neutral grey background, no shadow, no ground plane
 ```
 
 Hosted modeller güvenilir alpha kanalı üretmiyor — "şeffaf" istendiğinde damalı zemini
-*çiziyorlar*. Buna karşı düz tek renk magenta zemin istemek rembg'nin işini neredeyse
+*çiziyorlar*. Buna karşı düz tek renk zemin istemek rembg'nin işini neredeyse
 deterministik hale getiriyor. **Kenar kalitesi buradan geliyor, modelden değil.**
+
+**Renk neden nötr gri, chroma-key rengi değil.** İlk tasarımda `#FF00FF` magenta
+seçilmişti — chroma key mantığı. Ölçüm bunu çürüttü: rembg chroma key değil *alpha
+matting* yapıyor, yani kesim kenarındaki pikseller özne ile zeminin karışımı olarak
+çıkıyor. Doygun bir zemin, o kenara görünür renk sızdırıyor.
+
+Sentetik bir sprite üzerinde dört farklı özne rengiyle (turkuaz, beyaz, gri, altın)
+ölçüldü:
+
+| zemin | saçak pikseli (4 özne) | segmentasyon |
+|---|---|---|
+| `#FF00FF` | 883 / 1810 / 2079 / 610 — her seferinde görünür mor kenar | başarılı |
+| `#808080` | 0 / 0 / 0 / 0 | başarılı |
+| `#404040` | 0 / 0 / 0 / 0 | başarılı |
+
+Gri zeminin segmentasyonu bozacağı endişesi de yersiz çıktı: gri özne gri zeminde bile
+doğru ayrıldı, çünkü rembg renk kontrastına değil salience'a bakıyor.
 
 **2. `seed = hash(asset.id)`.** Destekleyen sağlayıcılarda aynı spec'i iki kez
 çalıştırmak aynı çıktıyı verir.

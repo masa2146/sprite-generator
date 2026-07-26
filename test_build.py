@@ -393,7 +393,7 @@ def test_manifest_records_carry_full_provenance():
     assert rec["model"] == "m/model"
     assert rec["base_url"] == "http://svc/v1"
     assert "play button" in rec["prompt"]
-    assert "#FF00FF" in rec["prompt"]  # BG_CLAUSE made it in
+    assert "#808080" in rec["prompt"]  # BG_CLAUSE made it in
 
 
 def test_bad_spec_exits_cleanly_without_a_traceback():
@@ -432,7 +432,7 @@ def test_init_sends_no_reference_and_uses_the_plate_prompt():
         gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
     assert stubs.references == [None, None, None, None]
     assert all("a button, an icon, a character" in p for p in stubs.prompts)
-    assert all("#FF00FF" in p for p in stubs.prompts)
+    assert all("#808080" in p for p in stubs.prompts)
 
 
 def test_init_plates_are_saved_raw_without_background_removal():

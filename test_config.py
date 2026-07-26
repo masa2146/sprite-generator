@@ -84,12 +84,12 @@ def test_full_prompt_includes_prefix_asset_bg_clause_and_ratio():
     assert text.endswith("aspect ratio 3:4")
 
 
-def test_cutout_false_prompt_has_no_magenta_clause():
+def test_cutout_false_prompt_has_no_backdrop_clause():
     _clear_env()
     pack = load_pack(_write(FULL_SPEC))
     sky = {a.id: a for a in pack.assets}["bg_sky"]
     text = pack.full_prompt(sky)
-    assert "#FF00FF" not in text
+    assert "#808080" not in text
     assert BG_CLAUSE not in text
     assert "seamless sky" in text
 

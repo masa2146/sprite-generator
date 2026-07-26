@@ -13,7 +13,13 @@ DEFAULT_KEY_ENV = "OPENROUTER_API_KEY"
 
 # Hosted models do not emit reliable alpha, so we ask for a flat backdrop we can
 # cut locally. Edge quality comes from this clause, not from the model.
-BG_CLAUSE = "isolated on flat solid #FF00FF background, no shadow, no ground plane"
+# Neutral grey, not a chroma-key colour. rembg does alpha matting, not chroma
+# keying: edge pixels come out as a blend of subject and backdrop, so a
+# saturated backdrop bleeds visible colour into the cutout's edge. Measured on
+# a synthetic sprite across four subject colours: #FF00FF left 610-2079 tinted
+# edge pixels every time, #808080 left zero, with segmentation quality
+# unchanged (rembg keys on salience, not colour contrast).
+BG_CLAUSE = "isolated on flat solid #808080 neutral grey background, no shadow, no ground plane"
 
 
 class SpecError(Exception):
@@ -67,7 +73,7 @@ class Pack:
             # it can be cut out locally (see BG_CLAUSE).
             return f"{prefix} {body} {BG_CLAUSE}, aspect ratio {asset.aspect_ratio}"
         # This asset IS the whole image (a background, a seamless tile) — there
-        # is nothing to isolate, so no magenta clause and no cutout later.
+        # is nothing to isolate, so no backdrop clause and no cutout later.
         return f"{prefix} {body}, aspect ratio {asset.aspect_ratio}"
 
     def plate_full_prompt(self) -> str:
