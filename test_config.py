@@ -3,7 +3,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from config import BG_CLAUSE, DEFAULT_BASE_URL, SpecError, load_pack
+from config import BG_CLAUSE, DEFAULT_BASE_URL, DEFAULT_KEY_ENV, SpecError, load_pack
 
 FULL_SPEC = """
 [api]
@@ -99,9 +99,11 @@ def test_precedence_cli_beats_spec_beats_env_beats_default():
     assert load_pack(spec).base_url == "https://spec.example/v1"
 
     bare = _write(MINIMAL_SPEC)
-    os.environ["SPRITEGEN_BASE_URL"] = "http://env/v1"
-    assert load_pack(bare).base_url == "http://env/v1"
-    del os.environ["SPRITEGEN_BASE_URL"]
+    try:
+        os.environ["SPRITEGEN_BASE_URL"] = "http://env/v1"
+        assert load_pack(bare).base_url == "http://env/v1"
+    finally:
+        del os.environ["SPRITEGEN_BASE_URL"]
     assert load_pack(bare).base_url == DEFAULT_BASE_URL
 
 
@@ -122,15 +124,30 @@ def test_api_key_read_from_named_env_var_only():
     pack = load_pack(_write(FULL_SPEC))
     assert pack.key_env == "SPEC_KEY"
     assert pack.api_key() is None
-    os.environ["SPEC_KEY"] = "sk-test"
-    assert pack.api_key() == "sk-test"
-    del os.environ["SPEC_KEY"]
+    try:
+        os.environ["SPEC_KEY"] = "sk-test"
+        assert pack.api_key() == "sk-test"
+    finally:
+        del os.environ["SPEC_KEY"]
 
 
 def test_empty_key_env_means_no_key_at_all():
     _clear_env()
     spec = _write(MINIMAL_SPEC.replace("[pack]", '[api]\nkey_env = ""\n[pack]'))
     assert load_pack(spec).api_key() is None
+
+
+def test_absent_key_env_uses_default():
+    _clear_env()
+    spec = _write(MINIMAL_SPEC)
+    pack = load_pack(spec)
+    assert pack.key_env == DEFAULT_KEY_ENV
+    assert pack.api_key() is None
+    try:
+        os.environ["OPENROUTER_API_KEY"] = "sk-default-test"
+        assert pack.api_key() == "sk-default-test"
+    finally:
+        del os.environ["OPENROUTER_API_KEY"]
 
 
 def test_duplicate_asset_id_is_rejected():
