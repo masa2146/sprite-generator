@@ -188,6 +188,44 @@ def test_parse_images_raises_image_missing_when_data_key_is_absent():
         pass
 
 
+def test_parse_images_raises_image_missing_when_data_is_not_a_list():
+    """data[0] on a dict raises KeyError in the naive form — must degrade to
+    ImageMissing instead of propagating."""
+    try:
+        orclient.parse_image_images({"data": {"b64_json": "x"}})
+        raise AssertionError("expected ImageMissing")
+    except orclient.ImageMissing:
+        pass
+
+
+def test_parse_images_raises_image_missing_on_truncated_base64():
+    """Finding 1: truncated/invalid base64 in b64_json used to propagate a bare
+    binascii.Error instead of degrading to ImageMissing — the one failure mode
+    where the raw response would have been thrown away instead of written to
+    {id}.error.json."""
+    try:
+        orclient.parse_image_images({"data": [{"b64_json": "not-valid-base64!!"}]})
+        raise AssertionError("expected ImageMissing")
+    except orclient.ImageMissing:
+        pass
+
+
+def test_parse_images_raises_image_missing_on_non_string_b64_json():
+    try:
+        orclient.parse_image_images({"data": [{"b64_json": 123}]})
+        raise AssertionError("expected ImageMissing")
+    except orclient.ImageMissing:
+        pass
+
+
+def test_parse_images_falls_through_to_regex_when_b64_json_is_bad():
+    """A decode failure at the preferred site must not give up outright — it
+    falls through to the data-URI regex fallback, which can still succeed."""
+    body = {"data": [{"b64_json": "not-valid-base64!!"}],
+            "note": f"data:image/png;base64,{B64}"}
+    assert orclient.parse_image_images(body) == PNG
+
+
 def test_headers_include_bearer_when_key_present():
     os.environ["TEST_KEY"] = "sk-abc"
     try:
@@ -241,6 +279,47 @@ def test_parse_raises_on_empty_response():
         raise AssertionError("expected ImageMissing")
     except orclient.ImageMissing:
         pass
+
+
+def test_parse_raises_image_missing_on_truncated_base64_in_images_array():
+    """Finding 1 (pre-existing on chat too): a truncated data URI in
+    message.images[] used to raise a bare binascii.Error instead of degrading
+    to ImageMissing."""
+    body = {"choices": [{"message": {"images": [
+        {"image_url": {"url": "data:image/png;base64,not-valid-base64!!"}}
+    ]}}]}
+    try:
+        orclient.parse_image(body)
+        raise AssertionError("expected ImageMissing")
+    except orclient.ImageMissing:
+        pass
+
+
+def test_parse_raises_image_missing_on_truncated_base64_in_content_fallback():
+    """Same flaw at the second decode site: the data-URI regex fallback over
+    message content."""
+    body = {"choices": [{"message": {
+        "content": "here you go data:image/png;base64,not-valid-base64!! enjoy"
+    }}]}
+    try:
+        orclient.parse_image(body)
+        raise AssertionError("expected ImageMissing")
+    except orclient.ImageMissing:
+        pass
+
+
+def test_parse_falls_through_to_regex_when_images_array_entry_is_bad():
+    """A decode failure in message.images[] must not give up outright — it
+    falls through to the content data-URI regex, which can still succeed.
+    ("content" is listed before "images" here so the regex — which returns
+    only its first match over the whole serialized message — lands on the
+    good data URI rather than the bad one; the fallback is a single regex
+    search, not a retry loop.)"""
+    body = {"choices": [{"message": {
+        "content": f"here you go data:image/png;base64,{B64} enjoy",
+        "images": [{"image_url": {"url": "data:image/png;base64,not-valid-base64!!"}}],
+    }}]}
+    assert orclient.parse_image(body) == PNG
 
 
 def test_cost_is_none_when_provider_omits_usage():

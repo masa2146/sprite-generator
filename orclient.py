@@ -12,6 +12,7 @@ between them; both share retry policy, headers and cost parsing.
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import re
 import time
@@ -20,6 +21,21 @@ import requests
 
 _DATA_URI = re.compile(r"data:image/[a-zA-Z0-9.+-]+;base64,([A-Za-z0-9+/=]+)")
 _TIMEOUT = 180
+
+
+def _b64(s) -> bytes | None:
+    """Decode a base64 payload, or return None instead of raising.
+
+    A malformed/truncated payload (bad padding) or a non-string payload (a
+    provider that sends b64_json as something other than a string) must not
+    kill the caller with a bare binascii.Error/TypeError — the caller falls
+    through to the next parsing strategy and ultimately to ImageMissing, so
+    the raw response still gets written to disk for inspection.
+    """
+    try:
+        return base64.b64decode(s) if isinstance(s, str) else None
+    except binascii.Error:
+        return None
 
 
 class ApiError(Exception):
@@ -111,20 +127,28 @@ def build_headers(pack) -> dict:
 
 
 def parse_image(resp: dict) -> bytes:
-    """Dig the image out of a response. Providers vary, so this is deliberately loose."""
+    """Dig the image out of a response. Providers vary, so this is deliberately
+    loose. A decode failure (truncated/invalid base64) at either site below
+    must not propagate — it falls through to the next strategy, same as
+    "no image found here", so a bad response still ends in ImageMissing
+    rather than a bare binascii.Error."""
     message = ((resp.get("choices") or [{}])[0] or {}).get("message") or {}
 
     # Preferred shape: OpenRouter's message.images[]
     for item in message.get("images") or []:
         url = ((item or {}).get("image_url") or {}).get("url", "")
         if url.startswith("data:image"):
-            return base64.b64decode(url.split(",", 1)[1])
+            decoded = _b64(url.split(",", 1)[1])
+            if decoded is not None:
+                return decoded
 
     # Fallback: any data URI anywhere in the message, whether the content is a
     # plain string or a structured list.
     match = _DATA_URI.search(json.dumps(message))
     if match:
-        return base64.b64decode(match.group(1))
+        decoded = _b64(match.group(1))
+        if decoded is not None:
+            return decoded
 
     raise ImageMissing(resp)
 
@@ -132,18 +156,22 @@ def parse_image(resp: dict) -> bytes:
 def parse_image_images(resp: dict) -> bytes:
     """Dig the image out of a POST /images response. Prefers data[0].b64_json;
     falls back to the same tolerant data-URI regex used for chat. Must not
-    raise TypeError/IndexError on degenerate shapes (data: [], data: [null],
-    missing data key)."""
-    data = resp.get("data") or []
-    first = data[0] if data else None
+    raise TypeError/IndexError/KeyError on degenerate shapes (data: [],
+    data: [null], missing data key, data not a list) and must not propagate a
+    base64 decode failure (truncated b64_json, non-string b64_json) — either
+    case falls through to the regex fallback and then to ImageMissing."""
+    data = resp.get("data")
+    first = data[0] if isinstance(data, list) and data else None
     if isinstance(first, dict):
-        b64 = first.get("b64_json")
-        if b64:
-            return base64.b64decode(b64)
+        decoded = _b64(first.get("b64_json"))
+        if decoded is not None:
+            return decoded
 
     match = _DATA_URI.search(json.dumps(resp))
     if match:
-        return base64.b64decode(match.group(1))
+        decoded = _b64(match.group(1))
+        if decoded is not None:
+            return decoded
 
     raise ImageMissing(resp)
 
