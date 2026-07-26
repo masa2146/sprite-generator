@@ -61,6 +61,7 @@ def build_one(pack, asset, reference_png):
         png, cost, _raw = orclient.generate(
             pack,
             pack.full_prompt(asset),
+            aspect_ratio=asset.aspect_ratio,
             reference_png=reference_png,
             seed=pack.seed_for(asset.id),
         )
@@ -140,7 +141,7 @@ def cmd_build(args):
     try:
         pack = config.load_pack(
             args.spec, base_url=args.base_url, model=args.model,
-            out_root=Path(args.out_root),
+            transport=args.transport, out_root=Path(args.out_root),
         )
     except config.SpecError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -250,7 +251,7 @@ def cmd_init(args):
     try:
         pack = config.load_pack(
             args.spec, base_url=args.base_url, model=args.model,
-            out_root=Path(args.out_root),
+            transport=args.transport, out_root=Path(args.out_root),
         )
     except config.SpecError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -278,7 +279,7 @@ def cmd_init(args):
             break
         try:
             # Plates carry no reference image: this is where the style is born.
-            png, cost, _raw = orclient.generate(pack, prompt, seed=i)
+            png, cost, _raw = orclient.generate(pack, prompt, aspect_ratio="1:1", seed=i)
         except (orclient.ApiError, orclient.ImageMissing) as exc:
             print(f"[plate {i}] failed — {exc}", file=sys.stderr)
             continue
@@ -314,7 +315,7 @@ def cmd_pick(args):
     try:
         pack = config.load_pack(
             args.spec, base_url=args.base_url, model=args.model,
-            out_root=Path(args.out_root),
+            transport=args.transport, out_root=Path(args.out_root),
         )
     except config.SpecError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -336,6 +337,8 @@ def _add_common(sub):
     sub.add_argument("spec")
     sub.add_argument("--base-url", default=None, help="override [api] base_url")
     sub.add_argument("--model", default=None, help="override [pack] model")
+    sub.add_argument("--transport", default=None, choices=("images", "chat"),
+                      help="override [api] transport")
     sub.add_argument("--out-root", default="out", help="root output directory")
 
 

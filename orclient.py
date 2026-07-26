@@ -1,8 +1,12 @@
-"""Chat-completions transport for image generation.
+"""HTTP transports for image generation: OpenRouter's /images endpoint and
+OpenAI-schema /chat/completions with modalities: ["image", "text"].
 
-Targets any OpenAI-schema endpoint that supports modalities: ["image", "text"].
-This is the only OpenAI surface that carries a reference image without multipart,
-which is why it is used instead of /images/generations or /images/edits.
+/images is OpenRouter-specific and reaches far more image models there —
+aspect_ratio, seed and input_references (up to 14 reference images) are all
+first-class JSON fields. /chat/completions is kept because local OpenAI-
+compatible proxies speak it and carry a reference image without multipart,
+which is why it was the only transport originally. pack.transport selects
+between them; both share retry policy, headers and cost parsing.
 """
 
 from __future__ import annotations
@@ -75,6 +79,29 @@ def build_payload(
     return body
 
 
+def build_payload_images(
+    model: str,
+    prompt: str,
+    aspect_ratio: str | None = None,
+    reference_png: bytes | None = None,
+    seed: int | None = None,
+) -> dict:
+    """Payload for POST {base_url}/images. Optional fields are omitted
+    entirely (not sent as null) when absent — that's what the contract asks for."""
+    body: dict = {"model": model, "prompt": prompt, "n": 1}
+    if aspect_ratio is not None:
+        body["aspect_ratio"] = aspect_ratio
+    if seed is not None:
+        body["seed"] = seed
+    if reference_png:
+        b64 = base64.b64encode(reference_png).decode()
+        mime = _sniff_mime(reference_png)
+        body["input_references"] = [
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+        ]
+    return body
+
+
 def build_headers(pack) -> dict:
     headers = {"Content-Type": "application/json"}
     key = pack.api_key()
@@ -102,6 +129,25 @@ def parse_image(resp: dict) -> bytes:
     raise ImageMissing(resp)
 
 
+def parse_image_images(resp: dict) -> bytes:
+    """Dig the image out of a POST /images response. Prefers data[0].b64_json;
+    falls back to the same tolerant data-URI regex used for chat. Must not
+    raise TypeError/IndexError on degenerate shapes (data: [], data: [null],
+    missing data key)."""
+    data = resp.get("data") or []
+    first = data[0] if data else None
+    if isinstance(first, dict):
+        b64 = first.get("b64_json")
+        if b64:
+            return base64.b64decode(b64)
+
+    match = _DATA_URI.search(json.dumps(resp))
+    if match:
+        return base64.b64decode(match.group(1))
+
+    raise ImageMissing(resp)
+
+
 def response_cost(resp: dict) -> float | None:
     """Cost is an OpenRouter extension; local endpoints usually omit it."""
     cost = (resp.get("usage") or {}).get("cost")
@@ -111,15 +157,33 @@ def response_cost(resp: dict) -> float | None:
 def generate(
     pack,
     prompt: str,
+    aspect_ratio: str | None = None,
     reference_png: bytes | None = None,
     seed: int | None = None,
     retries: int = 3,
     sleeper=time.sleep,
 ) -> tuple[bytes, float | None, dict]:
-    """Generate one image. Returns (png_bytes, cost_or_none, raw_response)."""
-    url = pack.base_url.rstrip("/") + "/chat/completions"
+    """Generate one image. Returns (png_bytes, cost_or_none, raw_response).
+
+    Dispatches on pack.transport:
+      "images" -> POST {base_url}/images, aspect_ratio as a structured field.
+      "chat"   -> POST {base_url}/chat/completions, aspect_ratio appended to
+                  the prompt text (only when given) since the endpoint has no
+                  structured field for it.
+    """
     headers = build_headers(pack)
-    payload = build_payload(pack.model, prompt, reference_png, seed)
+    if pack.transport == "images":
+        url = pack.base_url.rstrip("/") + "/images"
+        payload = build_payload_images(
+            pack.model, prompt, aspect_ratio=aspect_ratio,
+            reference_png=reference_png, seed=seed,
+        )
+        parse = parse_image_images
+    else:
+        url = pack.base_url.rstrip("/") + "/chat/completions"
+        chat_prompt = f"{prompt}, aspect ratio {aspect_ratio}" if aspect_ratio else prompt
+        payload = build_payload(pack.model, chat_prompt, reference_png, seed)
+        parse = parse_image
 
     last_error: ApiError | None = None
     for attempt in range(retries):
@@ -136,7 +200,7 @@ def generate(
 
         if resp.status_code == 200:
             body = resp.json()
-            return parse_image(body), response_cost(body), body
+            return parse(body), response_cost(body), body
 
         if resp.status_code == 429 or resp.status_code >= 500:
             last_error = ApiError(f"HTTP {resp.status_code}", resp.status_code)

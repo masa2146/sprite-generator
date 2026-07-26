@@ -11,10 +11,14 @@ PNG = b"\x89PNG\r\n\x1a\nFAKEPIXELS"
 B64 = base64.b64encode(PNG).decode()
 
 
-def _pack(key_env="TEST_KEY", base_url="http://svc/v1"):
+def _pack(key_env="TEST_KEY", base_url="http://svc/v1", transport="chat"):
+    # Existing tests in this file exercise the chat transport specifically (its
+    # payload shape, its response shape), so the helper defaults to "chat"
+    # rather than config.DEFAULT_TRANSPORT — images-transport tests pass
+    # transport="images" explicitly.
     return Pack(
         name="t", base_url=base_url, key_env=key_env, model="m/model",
-        style_prefix="", plate_prompt="", assets=[],
+        style_prefix="", plate_prompt="", assets=[], transport=transport,
     )
 
 
@@ -37,6 +41,14 @@ def _ok_body(cost=0.04):
     }
 
 
+def _ok_body_images(cost=0.04):
+    return {
+        "created": 1748372400,
+        "data": [{"b64_json": B64, "media_type": "image/png"}],
+        "usage": {"cost": cost},
+    }
+
+
 class _Recorder:
     """Stands in for requests.post and records every call."""
 
@@ -49,14 +61,14 @@ class _Recorder:
         return self.responses.pop(0)
 
 
-def _run_with(responses, **kwargs):
+def _run_with(responses, pack=None, **kwargs):
     rec = _Recorder(responses)
     slept = []
     original = orclient.requests.post
     orclient.requests.post = rec
     try:
         result = orclient.generate(
-            _pack(), "a prompt", sleeper=slept.append, **kwargs
+            pack or _pack(), "a prompt", sleeper=slept.append, **kwargs
         )
         return result, rec, slept
     finally:
@@ -106,6 +118,74 @@ def test_payload_declares_webp_mime_for_a_webp_reference():
     body = orclient.build_payload("m/model", "hello", reference_png=webp)
     url = body["messages"][0]["content"][1]["image_url"]["url"]
     assert url.startswith("data:image/webp;base64,")
+
+
+# --- images payload shape ---------------------------------------------------
+
+def test_images_payload_shape_and_optional_fields_omitted():
+    body = orclient.build_payload_images("m/model", "hello")
+    assert body == {"model": "m/model", "prompt": "hello", "n": 1}
+    assert "aspect_ratio" not in body
+    assert "seed" not in body
+    assert "input_references" not in body
+
+
+def test_images_payload_includes_aspect_ratio_seed_and_reference():
+    body = orclient.build_payload_images(
+        "m/model", "hello", aspect_ratio="3:4", reference_png=PNG, seed=414956289
+    )
+    assert body["model"] == "m/model"
+    assert body["prompt"] == "hello"
+    assert body["n"] == 1
+    assert body["aspect_ratio"] == "3:4"
+    assert body["seed"] == 414956289
+    assert body["input_references"] == [
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{B64}"}}
+    ]
+
+
+def test_images_payload_declares_jpeg_mime_for_a_jpeg_reference():
+    jpeg = b"\xff\xd8\xff\xe0FAKEJPEGBYTES"
+    body = orclient.build_payload_images("m/model", "hello", reference_png=jpeg)
+    ref = body["input_references"][0]
+    assert ref["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert base64.b64decode(ref["image_url"]["url"].split(",", 1)[1]) == jpeg
+
+
+# --- images response parsing -------------------------------------------------
+
+def test_parse_images_reads_data_b64_json():
+    assert orclient.parse_image_images(_ok_body_images()) == PNG
+
+
+def test_parse_images_falls_back_to_a_data_uri():
+    body = {"data": [{"media_type": "image/png"}],
+            "note": f"data:image/png;base64,{B64}"}
+    assert orclient.parse_image_images(body) == PNG
+
+
+def test_parse_images_raises_image_missing_on_empty_data_list():
+    try:
+        orclient.parse_image_images({"data": []})
+        raise AssertionError("expected ImageMissing")
+    except orclient.ImageMissing:
+        pass
+
+
+def test_parse_images_raises_image_missing_on_null_data_entry():
+    try:
+        orclient.parse_image_images({"data": [None]})
+        raise AssertionError("expected ImageMissing")
+    except orclient.ImageMissing:
+        pass
+
+
+def test_parse_images_raises_image_missing_when_data_key_is_absent():
+    try:
+        orclient.parse_image_images({})
+        raise AssertionError("expected ImageMissing")
+    except orclient.ImageMissing:
+        pass
 
 
 def test_headers_include_bearer_when_key_present():
@@ -178,6 +258,50 @@ def test_generate_posts_to_chat_completions_and_returns_bytes_and_cost():
     assert raw["usage"]["cost"] == 0.04
     assert rec.calls[0]["url"] == "http://svc/v1/chat/completions"
     assert slept == []
+
+
+def test_generate_hits_images_endpoint_when_transport_is_images():
+    (png, cost, raw), rec, _ = _run_with(
+        [_Resp(200, _ok_body_images())], pack=_pack(transport="images"),
+    )
+    assert png == PNG
+    assert cost == 0.04
+    assert rec.calls[0]["url"] == "http://svc/v1/images"
+    assert rec.calls[0]["json"]["prompt"] == "a prompt"
+
+
+def test_generate_hits_chat_completions_when_transport_is_chat():
+    (png, cost, raw), rec, _ = _run_with(
+        [_Resp(200, _ok_body())], pack=_pack(transport="chat"),
+    )
+    assert png == PNG
+    assert rec.calls[0]["url"] == "http://svc/v1/chat/completions"
+
+
+def test_chat_transport_appends_aspect_ratio_text_to_the_prompt():
+    _, rec, _ = _run_with(
+        [_Resp(200, _ok_body())], pack=_pack(transport="chat"), aspect_ratio="3:4",
+    )
+    content = rec.calls[0]["json"]["messages"][0]["content"]
+    assert content[0]["text"] == "a prompt, aspect ratio 3:4"
+
+
+def test_images_transport_does_not_append_aspect_ratio_text_to_the_prompt():
+    _, rec, _ = _run_with(
+        [_Resp(200, _ok_body_images())], pack=_pack(transport="images"), aspect_ratio="3:4",
+    )
+    assert rec.calls[0]["json"]["prompt"] == "a prompt"
+    assert rec.calls[0]["json"]["aspect_ratio"] == "3:4"
+
+
+def test_cost_parsed_identically_on_both_transports():
+    (_, cost_chat, _), _, _ = _run_with(
+        [_Resp(200, _ok_body(cost=0.07))], pack=_pack(transport="chat"),
+    )
+    (_, cost_images, _), _, _ = _run_with(
+        [_Resp(200, _ok_body_images(cost=0.07))], pack=_pack(transport="images"),
+    )
+    assert cost_chat == cost_images == 0.07
 
 
 def test_generate_strips_trailing_slash_from_base_url():

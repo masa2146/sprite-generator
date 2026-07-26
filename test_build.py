@@ -26,6 +26,7 @@ SPEC = """
 [api]
 base_url = "http://svc/v1"
 key_env = ""
+transport = "chat"
 [pack]
 model = "m/model"
 [style]
