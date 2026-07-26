@@ -79,11 +79,15 @@ def build_one(pack, asset, reference_png):
     # The image is paid for by this point. If post-processing fails, keep the raw
     # file rather than losing the money.
     try:
-        img = post.cut_background(png)
-        if asset.trim:
-            img = post.trim_and_pad(img)
         target = out_dir / f"{asset.id}.png"
-        img.save(target)
+        if asset.cutout:
+            img = post.cut_background(png)
+            img = post.trim_and_pad(img)
+            img.save(target)
+        else:
+            # This asset IS the whole image (background/seamless tile) — there
+            # is no subject to cut out or trim, ship the bytes unmodified.
+            target.write_bytes(png)
     except Exception as exc:
         try:
             (out_dir / f"{asset.id}.raw.png").write_bytes(png)
@@ -108,6 +112,28 @@ def _missing_key(pack) -> bool:
 def _chunks(items, size):
     for i in range(0, len(items), size):
         yield items[i:i + size]
+
+
+def _merge_manifest(manifest_path, new_records):
+    """Merge this run's records into any existing manifest, keyed by asset id.
+
+    A `build --only` run must not truncate the provenance of ids it didn't
+    touch. Records for ids not in this run are preserved; records for ids in
+    this run are replaced. A corrupt/unreadable existing manifest must not
+    crash the run — fall back to this run's records alone.
+    """
+    if not manifest_path.exists():
+        return new_records
+    try:
+        existing = json.loads(manifest_path.read_text())
+        by_id = {r["id"]: r for r in existing}
+    except Exception as exc:
+        print(f"warning: existing manifest unreadable ({exc}), "
+              "writing only this run's records", file=sys.stderr)
+        return new_records
+    for rec in new_records:
+        by_id[rec["id"]] = rec
+    return list(by_id.values())
 
 
 def cmd_build(args):
@@ -141,12 +167,12 @@ def cmd_build(args):
 
     records = []
     spent = 0.0
-    cost_available = True
+    cost_seen = False  # True once any record reports a real cost
     warned_no_cost = False
     stopped_early = False
 
     for chunk in _chunks(targets, WORKERS):
-        if cost_available and spent >= args.max_cost:
+        if cost_seen and spent >= args.max_cost:
             stopped_early = True
             break
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
@@ -166,31 +192,39 @@ def cmd_build(args):
             records.append(rec)
             print(f"[{rec['id']:<16}] {rec['status']}"
                   + (f" — {rec['error']}" if rec["error"] else ""))
-            if rec["cost"] is None and rec["status"] == "ok":
-                cost_available = False
-                if not warned_no_cost:
-                    print("warning: cost reporting unavailable, --max-cost disabled")
-                    warned_no_cost = True
-            elif rec["cost"]:
-                spent += rec["cost"]
+            if rec["status"] == "ok":
+                if rec["cost"] is None:
+                    # One response missing cost doesn't mean the provider never
+                    # reports it — charge the estimate and keep enforcing. Only
+                    # a run where NO record ever reports cost disables the
+                    # ceiling entirely (see `cost_seen` gate above).
+                    if not warned_no_cost:
+                        print("warning: cost reporting unavailable for one or more "
+                              f"responses; charging the ${EST_COST:.2f} estimate for those")
+                        warned_no_cost = True
+                    spent += EST_COST
+                else:
+                    cost_seen = True
+                    spent += rec["cost"]
 
     manifest_ok = True
     try:
-        pack.manifest_path.write_text(json.dumps(records, indent=2))
+        merged = _merge_manifest(pack.manifest_path, records)
+        pack.manifest_path.write_text(json.dumps(merged, indent=2))
     except Exception as exc:
         manifest_ok = False
         print(f"error: failed to write manifest: {exc}", file=sys.stderr)
 
     ok = sum(1 for r in records if r["status"] == "ok")
     failed = [r for r in records if r["status"] == "failed"]
-    budget = f"(${spent:.2f} / ${args.max_cost:.2f})" if cost_available else "(cost unknown)"
+    budget = f"(${spent:.2f} / ${args.max_cost:.2f})" if cost_seen else "(cost unknown)"
     print(f"\ndone: {ok} ok, {len(failed)} failed  {budget}")
     if stopped_early:
         print(f"stopped: cost ceiling ${args.max_cost:.2f} reached, "
               f"{len(targets) - len(records)} assets not requested")
     if failed:
         print("failed: " + ", ".join(f"{r['id']} ({r['error']})" for r in failed))
-        print(f"retry: python gen.py build {args.spec} --only "
+        print(f"retry: python3 gen.py build {args.spec} --only "
               + ",".join(r["id"] for r in failed))
     # A truncated run (cost ceiling hit) or a failed manifest write means the batch
     # is incomplete or unrecorded, even if every asset that did run succeeded — a
@@ -248,10 +282,17 @@ def cmd_init(args):
         except (orclient.ApiError, orclient.ImageMissing) as exc:
             print(f"[plate {i}] failed — {exc}", file=sys.stderr)
             continue
-        target = pack.candidates_dir / f"{i}.png"
+        except Exception as exc:  # transport-level surprises: connection reset, DNS, ...
+            print(f"[plate {i}] failed — {type(exc).__name__}: {exc}", file=sys.stderr)
+            continue
+        # Named by position among successes, not by loop index `i` — so a mid-
+        # sequence failure can't desync the on-disk files from the contact
+        # sheet cells (built from `written`) or from the printed pick hint.
+        idx = len(written)
+        target = pack.candidates_dir / f"{idx}.png"
         target.write_bytes(png)  # raw, no background removal
         written.append(target)
-        print(f"[plate {i}] ok")
+        print(f"[plate {i}] ok -> {idx}.png")
         if cost is None:
             cost_available = False
         else:
@@ -263,7 +304,7 @@ def cmd_init(args):
 
     sheet = contact_sheet(written, pack.candidates_dir / "contact_sheet.png")
     print(f"\n{len(written)} plates → {sheet}")
-    print(f"pick one:  python gen.py pick {args.spec} <0-{len(written) - 1}>")
+    print(f"pick one:  python3 gen.py pick {args.spec} <0-{len(written) - 1}>")
     if not args.no_open:
         webbrowser.open(Path(sheet).resolve().as_uri())
     return 0
@@ -287,7 +328,7 @@ def cmd_pick(args):
     pack.out_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(candidate, pack.style_bible)
     print(f"style bible locked: {pack.style_bible}")
-    print(f"now run:  python gen.py build {args.spec}")
+    print(f"now run:  python3 gen.py build {args.spec}")
     return 0
 
 
