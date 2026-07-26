@@ -1,0 +1,188 @@
+"""Spec parsing and precedence tests. Run: python test_config.py"""
+import os
+import tempfile
+from pathlib import Path
+
+from config import BG_CLAUSE, DEFAULT_BASE_URL, SpecError, load_pack
+
+FULL_SPEC = """
+[api]
+base_url = "https://spec.example/v1"
+key_env  = "SPEC_KEY"
+
+[pack]
+model = "spec/model"
+
+[style]
+prefix = "hypercasual asset, glossy"
+plate_prompt = "a button, an icon, a character"
+
+[defaults]
+aspect_ratio = "1:1"
+
+[[assets]]
+id = "btn_play"
+prompt = "play button"
+
+[[assets]]
+id = "hero_idle"
+prompt = "round blue character"
+aspect_ratio = "3:4"
+
+[[assets]]
+id = "bg_sky"
+prompt = "seamless sky"
+trim = false
+"""
+
+MINIMAL_SPEC = """
+[pack]
+model = "m"
+[style]
+prefix = "p"
+[[assets]]
+id = "a"
+prompt = "q"
+"""
+
+
+def _write(text, name="hc_v1.toml"):
+    d = Path(tempfile.mkdtemp())
+    p = d / name
+    p.write_text(text)
+    return p
+
+
+def _clear_env():
+    for k in ("SPRITEGEN_BASE_URL", "SPRITEGEN_MODEL", "SPEC_KEY", "OPENROUTER_API_KEY"):
+        os.environ.pop(k, None)
+
+
+def test_pack_name_comes_from_spec_filename():
+    _clear_env()
+    assert load_pack(_write(FULL_SPEC)).name == "hc_v1"
+
+
+def test_assets_parse_with_defaults_and_overrides():
+    _clear_env()
+    pack = load_pack(_write(FULL_SPEC))
+    by_id = {a.id: a for a in pack.assets}
+    assert by_id["btn_play"].aspect_ratio == "1:1"   # from [defaults]
+    assert by_id["hero_idle"].aspect_ratio == "3:4"  # asset override
+    assert by_id["btn_play"].trim is True            # default
+    assert by_id["bg_sky"].trim is False             # asset override
+
+
+def test_full_prompt_includes_prefix_asset_bg_clause_and_ratio():
+    _clear_env()
+    pack = load_pack(_write(FULL_SPEC))
+    hero = {a.id: a for a in pack.assets}["hero_idle"]
+    text = pack.full_prompt(hero)
+    assert text.startswith("hypercasual asset, glossy")
+    assert "round blue character" in text
+    assert BG_CLAUSE in text
+    assert text.endswith("aspect ratio 3:4")
+
+
+def test_plate_prompt_also_carries_prefix_and_bg_clause():
+    _clear_env()
+    text = load_pack(_write(FULL_SPEC)).plate_full_prompt()
+    assert "hypercasual asset, glossy" in text
+    assert "a button, an icon, a character" in text
+    assert BG_CLAUSE in text
+
+
+def test_precedence_cli_beats_spec_beats_env_beats_default():
+    _clear_env()
+    spec = _write(FULL_SPEC)
+    assert load_pack(spec, base_url="http://cli/v1").base_url == "http://cli/v1"
+    assert load_pack(spec).base_url == "https://spec.example/v1"
+
+    bare = _write(MINIMAL_SPEC)
+    os.environ["SPRITEGEN_BASE_URL"] = "http://env/v1"
+    assert load_pack(bare).base_url == "http://env/v1"
+    del os.environ["SPRITEGEN_BASE_URL"]
+    assert load_pack(bare).base_url == DEFAULT_BASE_URL
+
+
+def test_model_precedence_and_missing_model_is_an_error():
+    _clear_env()
+    assert load_pack(_write(FULL_SPEC), model="cli/m").model == "cli/m"
+    assert load_pack(_write(FULL_SPEC)).model == "spec/model"
+    no_model = _write("[style]\nprefix='p'\n[[assets]]\nid='a'\nprompt='q'\n")
+    try:
+        load_pack(no_model)
+        raise AssertionError("expected SpecError")
+    except SpecError as e:
+        assert "model" in str(e)
+
+
+def test_api_key_read_from_named_env_var_only():
+    _clear_env()
+    pack = load_pack(_write(FULL_SPEC))
+    assert pack.key_env == "SPEC_KEY"
+    assert pack.api_key() is None
+    os.environ["SPEC_KEY"] = "sk-test"
+    assert pack.api_key() == "sk-test"
+    del os.environ["SPEC_KEY"]
+
+
+def test_empty_key_env_means_no_key_at_all():
+    _clear_env()
+    spec = _write(MINIMAL_SPEC.replace("[pack]", '[api]\nkey_env = ""\n[pack]'))
+    assert load_pack(spec).api_key() is None
+
+
+def test_duplicate_asset_id_is_rejected():
+    _clear_env()
+    dupe = _write(MINIMAL_SPEC + "\n[[assets]]\nid = 'a'\nprompt = 'other'\n")
+    try:
+        load_pack(dupe)
+        raise AssertionError("expected SpecError")
+    except SpecError as e:
+        assert "duplicate" in str(e)
+
+
+def test_asset_missing_required_field_is_rejected():
+    _clear_env()
+    bad = _write("[pack]\nmodel='m'\n[style]\nprefix='p'\n[[assets]]\nid='a'\n")
+    try:
+        load_pack(bad)
+        raise AssertionError("expected SpecError")
+    except SpecError as e:
+        assert "prompt" in str(e)
+
+
+def test_spec_with_no_assets_is_rejected():
+    _clear_env()
+    try:
+        load_pack(_write("[pack]\nmodel='m'\n[style]\nprefix='p'\n"))
+        raise AssertionError("expected SpecError")
+    except SpecError as e:
+        assert "assets" in str(e)
+
+
+def test_seed_is_deterministic_across_processes():
+    _clear_env()
+    pack = load_pack(_write(FULL_SPEC))
+    # crc32 is stable; builtin hash() would not be
+    assert pack.seed_for("btn_play") == pack.seed_for("btn_play")
+    assert pack.seed_for("btn_play") != pack.seed_for("hero_idle")
+    assert 0 <= pack.seed_for("btn_play") < 2**31
+
+
+def test_paths_derive_from_pack_name():
+    _clear_env()
+    pack = load_pack(_write(FULL_SPEC), out_root=Path("/tmp/outroot"))
+    assert pack.out_dir == Path("/tmp/outroot/hc_v1")
+    assert pack.style_bible == Path("/tmp/outroot/hc_v1/style_bible.png")
+    assert pack.candidates_dir == Path("/tmp/outroot/hc_v1/style_candidates")
+    assert pack.manifest_path == Path("/tmp/outroot/hc_v1/manifest.json")
+
+
+if __name__ == "__main__":
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_"):
+            fn()
+            print(f"ok  {name}")
+    print("all config tests passed")
