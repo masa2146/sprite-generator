@@ -4,12 +4,18 @@
 [api]
 base_url = "https://openrouter.ai/api/v1"
 key_env  = "OPENROUTER_API_KEY"   # env var NAME, never the key itself
+# "images" reaches far more OpenRouter image models than /chat/completions
+# (structured aspect_ratio/seed/input_references). Use "chat" instead when
+# base_url points at a local OpenAI-compatible proxy.
+transport = "images"
 # For a local OpenAI-compatible endpoint:
-#   base_url = "http://localhost:8080/v1"
-#   key_env  = ""              # empty means no Authorization header at all
+#   base_url  = "http://localhost:8080/v1"
+#   key_env   = ""              # empty means no Authorization header at all
+#   transport = "chat"
 
 [pack]
-model = "google/gemini-2.5-flash-image"   # cheapest image-output model on OpenRouter (~$0.039/image)
+model = "bytedance-seed/seedream-4.5"   # $0.04/image; images-only output_modalities,
+                                          # only reachable via the /images endpoint
 
 [style]
 # Prepended to every prompt, including the style plates.
@@ -59,5 +65,5 @@ id     = "bg_sky"
 prompt = "seamless pastel sky gradient with soft rounded clouds"
 aspect_ratio = "9:16"
 # This asset IS the whole image, not a sprite with a subject to cut out — a
-# full-bleed background has nothing to isolate on a backdrop and nothing to trim.
+# full-bleed background has nothing to isolate on magenta and nothing to trim.
 cutout = false

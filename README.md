@@ -35,22 +35,42 @@ Useful flags:
 | `--dry-run` | print every prompt and the estimated cost, make no requests |
 | `--only id1,id2` | regenerate just these assets |
 | `--max-cost 2.00` | stop before exceeding this USD total (default 5.00) |
-| `--base-url` / `--model` | override the spec for one run |
+| `--base-url` / `--model` / `--transport` | override the spec for one run |
 
-## Pointing at another endpoint
+## Transport: `images` vs `chat`
 
-Any OpenAI-schema endpoint that supports `modalities: ["image", "text"]` on
-`/chat/completions` works. Set it in the spec:
+Two HTTP transports talk to two different endpoints:
+
+| transport | endpoint | notes |
+|---|---|---|
+| `images` (default) | `POST {base_url}/images` | OpenRouter-specific. `aspect_ratio` and `seed` are structured JSON fields, and `input_references` carries up to 14 reference images. |
+| `chat` | `POST {base_url}/chat/completions` | Any OpenAI-schema endpoint with `modalities: ["image", "text"]`. The aspect ratio is appended to the prompt text since there is no structured field for it. |
+
+**The default is `images`**, matching the default `base_url`
+(`https://openrouter.ai/api/v1`). Measured against the live API, `/images`
+reaches far more OpenRouter image models than `/chat/completions` does —
+including models whose `output_modalities` is `["image"]` only, which
+`/chat/completions` 404s on. If you point `base_url` at a **local
+OpenAI-compatible proxy**, set `transport = "chat"` — those proxies typically
+only speak the chat surface.
 
 ```toml
 [api]
-base_url = "http://localhost:8080/v1"
-key_env  = ""     # empty: no Authorization header is sent
+transport = "chat"
+base_url  = "http://localhost:8080/v1"
+key_env   = ""     # empty: no Authorization header is sent
 ```
 
-Precedence is CLI flag > spec file > environment (`SPRITEGEN_BASE_URL`,
-`SPRITEGEN_MODEL`) > OpenRouter default. **API keys are read from environment
-variables only** — the spec file holds the variable's *name*, never its value.
+Set it with `[api] transport` in the spec, `--transport`, or the
+`SPRITEGEN_TRANSPORT` env var. Precedence is CLI flag > spec file > environment
+(`SPRITEGEN_BASE_URL`, `SPRITEGEN_MODEL`, `SPRITEGEN_TRANSPORT`) > default. An
+unrecognised value fails immediately at load time rather than as a confusing
+404 later.
+
+**API keys are read from environment variables only** — the spec file's
+`key_env` holds the variable's *name*, never its value. A `key_env` that looks
+like a pasted key (starts with `sk-`, or contains a character no environment
+variable name may contain) is rejected at load time.
 
 The `usage.cost` field is an OpenRouter extension. Against an endpoint that omits
 it, `--max-cost` cannot be enforced; the tool warns once and continues rather
