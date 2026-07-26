@@ -72,7 +72,17 @@ spec satırı
 uzun kenarın %4'ü kadar şeffaf margin eklenir ve sonuç kareye tamamlanır (özne ortalanmış).
 Kare kenar uzunluğu = `max(w, h) * 1.08`, yukarı yuvarlanmış çift sayı. Yeniden
 boyutlandırma yok — sadece kırpma ve şeffaf dolgu, yani hiçbir piksel yeniden örneklenmiyor.
-`trim = false` olan asset'lerde bu adımın tamamı atlanır, görsel modelden geldiği boyutta kalır.
+
+**`cutout` alanı — asset'in türünü belirler:**
+
+| değer | anlamı | pipeline |
+|---|---|---|
+| `cutout = true` (varsayılan) | Bu asset bir *özne* içeriyor: buton, ikon, karakter | `BG_CLAUSE` eklenir → `cut_background` → `trim_and_pad` |
+| `cutout = false` | Bu asset *görselin kendisi*: arka plan, seamless tile | Hiçbiri. `BG_CLAUSE` eklenmez, alpha kesilmez, kırpılmaz |
+
+Bu tek alan, "kırpılsın mı" değil "bu ne tür bir görsel" sorusunu yanıtlıyor — ve pipeline'ın
+üç adımını birden yönetiyor. Full-bleed bir gökyüzüne "magenta zeminde izole et" demek ve
+sonra arka planını silmeye çalışmak anlamsız; alan bunu yapısal olarak imkânsız kılıyor.
 
 ### Stil tutarlılığı — style-seed + referans zinciri
 
@@ -207,12 +217,13 @@ aspect_ratio = "3:4"
 [[assets]]
 id     = "bg_sky"
 prompt = "seamless pastel sky gradient with soft clouds"
-trim   = false
+cutout = false                # görselin kendisi, özne değil
 ```
 
 **Kategori enum'u (ui / char / env) bilerek yok.** Kategori yalnızca iki şeyi
-değiştiriyordu: `aspect_ratio` ve trim davranışı. İkisi de zaten asset seviyesinde alan.
-Enum, üstlerine bir soyutlama katmanı eklemekten başka iş yapmazdı.
+değiştiriyordu: `aspect_ratio` ve pipeline davranışı. İkisi de zaten asset seviyesinde alan
+(`aspect_ratio` ve `cutout`). Enum, üstlerine bir soyutlama katmanı eklemekten başka iş
+yapmazdı.
 
 ---
 
