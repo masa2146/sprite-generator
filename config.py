@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 import zlib
 from dataclasses import dataclass, field
@@ -10,6 +11,13 @@ from pathlib import Path
 
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_KEY_ENV = "OPENROUTER_API_KEY"
+# "images" matches the default base_url (OpenRouter): it reaches far more image
+# models than /chat/completions does there. A local OpenAI-compatible proxy
+# needs transport = "chat".
+DEFAULT_TRANSPORT = "images"
+VALID_TRANSPORTS = ("images", "chat")
+
+_VALID_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # Hosted models do not emit reliable alpha, so we ask for a flat backdrop we can
 # cut locally. Edge quality comes from this clause, not from the model.
@@ -44,6 +52,7 @@ class Pack:
     plate_prompt: str
     assets: list[Asset] = field(default_factory=list)
     out_root: Path = Path("out")
+    transport: str = DEFAULT_TRANSPORT
 
     @property
     def out_dir(self) -> Path:
@@ -66,15 +75,18 @@ class Pack:
         return os.environ.get(self.key_env) if self.key_env else None
 
     def full_prompt(self, asset: Asset) -> str:
+        """Prompt wording only — no aspect-ratio text. How aspect ratio is
+        carried is the transport's job: the images transport passes it as a
+        structured field, the chat transport appends it to the prompt text."""
         prefix = self.style_prefix.strip()
         body = asset.prompt.strip()
         if asset.cutout:
             # This asset is a sprite with a subject: ask for a flat backdrop so
             # it can be cut out locally (see BG_CLAUSE).
-            return f"{prefix} {body} {BG_CLAUSE}, aspect ratio {asset.aspect_ratio}"
+            return f"{prefix} {body} {BG_CLAUSE}"
         # This asset IS the whole image (a background, a seamless tile) — there
         # is nothing to isolate, so no backdrop clause and no cutout later.
-        return f"{prefix} {body}, aspect ratio {asset.aspect_ratio}"
+        return f"{prefix} {body}"
 
     def plate_full_prompt(self) -> str:
         return f"{self.style_prefix.strip()} {self.plate_prompt.strip()} {BG_CLAUSE}"
@@ -88,6 +100,7 @@ def load_pack(
     spec_path,
     base_url: str | None = None,
     model: str | None = None,
+    transport: str | None = None,
     out_root: Path = Path("out"),
 ) -> Pack:
     """Load a TOML spec. Precedence: CLI arg > spec file > env var > default."""
@@ -115,8 +128,27 @@ def load_pack(
     if not resolved_model:
         raise SpecError("no model: set [pack] model, pass --model, or set SPRITEGEN_MODEL")
 
+    resolved_transport = (
+        transport
+        or api.get("transport")
+        or os.environ.get("SPRITEGEN_TRANSPORT")
+        or DEFAULT_TRANSPORT
+    )
+    if resolved_transport not in VALID_TRANSPORTS:
+        raise SpecError(
+            f"invalid transport {resolved_transport!r}: must be 'images' or 'chat' "
+            "(set [api] transport, pass --transport, or set SPRITEGEN_TRANSPORT)"
+        )
+
     # key_env may be explicitly "" to mean "this endpoint needs no key".
     key_env = api["key_env"] if "key_env" in api else DEFAULT_KEY_ENV
+    if key_env and (key_env.startswith("sk-") or not _VALID_ENV_NAME.fullmatch(key_env)):
+        raise SpecError(
+            f"key_env looks like a credential value, not an environment variable "
+            f"name: {key_env!r}. key_env takes the NAME of an env var that holds "
+            'the key, e.g. key_env = "OPENROUTER_API_KEY", with the key itself set '
+            "via `export OPENROUTER_API_KEY=sk-...` — never the key itself in the spec."
+        )
 
     default_ratio = defaults.get("aspect_ratio", "1:1")
     assets: list[Asset] = []
@@ -148,4 +180,5 @@ def load_pack(
         plate_prompt=style.get("plate_prompt", ""),
         assets=assets,
         out_root=Path(out_root),
+        transport=resolved_transport,
     )

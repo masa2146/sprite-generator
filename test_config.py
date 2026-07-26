@@ -3,7 +3,14 @@ import os
 import tempfile
 from pathlib import Path
 
-from config import BG_CLAUSE, DEFAULT_BASE_URL, DEFAULT_KEY_ENV, SpecError, load_pack
+from config import (
+    BG_CLAUSE,
+    DEFAULT_BASE_URL,
+    DEFAULT_KEY_ENV,
+    DEFAULT_TRANSPORT,
+    SpecError,
+    load_pack,
+)
 
 FULL_SPEC = """
 [api]
@@ -73,7 +80,10 @@ def test_assets_parse_with_defaults_and_overrides():
     assert by_id["bg_sky"].cutout is False           # asset override
 
 
-def test_full_prompt_includes_prefix_asset_bg_clause_and_ratio():
+def test_full_prompt_includes_prefix_asset_and_bg_clause_no_ratio():
+    """aspect_ratio is no longer glued onto the prompt text — how it's carried
+    is the transport's job (structured field for images, appended text for
+    chat), not config's."""
     _clear_env()
     pack = load_pack(_write(FULL_SPEC))
     hero = {a.id: a for a in pack.assets}["hero_idle"]
@@ -81,7 +91,8 @@ def test_full_prompt_includes_prefix_asset_bg_clause_and_ratio():
     assert text.startswith("hypercasual asset, glossy")
     assert "round blue character" in text
     assert BG_CLAUSE in text
-    assert text.endswith("aspect ratio 3:4")
+    assert "aspect ratio" not in text
+    assert text.endswith(BG_CLAUSE)
 
 
 def test_cutout_false_prompt_has_no_backdrop_clause():
@@ -127,6 +138,61 @@ def test_model_precedence_and_missing_model_is_an_error():
         raise AssertionError("expected SpecError")
     except SpecError as e:
         assert "model" in str(e)
+
+
+def test_transport_defaults_to_images():
+    _clear_env()
+    assert load_pack(_write(MINIMAL_SPEC)).transport == "images" == DEFAULT_TRANSPORT
+
+
+def test_transport_precedence_cli_beats_spec_beats_env_beats_default():
+    _clear_env()
+    spec_chat = _write(FULL_SPEC.replace("[api]", '[api]\ntransport = "chat"'))
+    assert load_pack(spec_chat, transport="images").transport == "images"
+    assert load_pack(spec_chat).transport == "chat"
+
+    bare = _write(MINIMAL_SPEC)
+    try:
+        os.environ["SPRITEGEN_TRANSPORT"] = "chat"
+        assert load_pack(bare).transport == "chat"
+    finally:
+        del os.environ["SPRITEGEN_TRANSPORT"]
+    assert load_pack(bare).transport == DEFAULT_TRANSPORT
+
+
+def test_invalid_transport_is_rejected():
+    _clear_env()
+    bad = _write(MINIMAL_SPEC.replace("[pack]", '[api]\ntransport = "carrier-pigeon"\n[pack]'))
+    try:
+        load_pack(bad)
+        raise AssertionError("expected SpecError")
+    except SpecError as e:
+        assert "images" in str(e) and "chat" in str(e)
+
+
+def test_key_env_rejects_a_pasted_key_value():
+    _clear_env()
+    bad = _write(MINIMAL_SPEC.replace(
+        "[pack]", '[api]\nkey_env = "sk-or-v1-abcdef1234567890"\n[pack]'
+    ))
+    try:
+        load_pack(bad)
+        raise AssertionError("expected SpecError")
+    except SpecError as e:
+        assert "key_env" in str(e)
+        assert "name" in str(e).lower()
+
+
+def test_key_env_rejects_a_value_with_characters_no_env_name_may_have():
+    _clear_env()
+    bad = _write(MINIMAL_SPEC.replace(
+        "[pack]", '[api]\nkey_env = "not an env name!"\n[pack]'
+    ))
+    try:
+        load_pack(bad)
+        raise AssertionError("expected SpecError")
+    except SpecError as e:
+        assert "key_env" in str(e)
 
 
 def test_api_key_read_from_named_env_var_only():
