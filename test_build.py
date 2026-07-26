@@ -307,6 +307,119 @@ def test_bad_spec_exits_cleanly_without_a_traceback():
     assert gen.main(["build", str(bad)]) == 1
 
 
+# --- init / pick -----------------------------------------------------------
+
+# Distinct real PNGs, so contact_sheet can decode them and so we can tell which
+# plate `pick` chose by comparing bytes.
+PLATES = [_png((i * 60, 0, 0)) for i in range(4)]
+
+
+def _plate_outcomes(cost=0.0, count=4):
+    return [(PLATES[i], cost) for i in range(count)]
+
+
+def test_init_generates_four_plates_and_a_contact_sheet():
+    tmp = tempfile.mkdtemp()
+    spec = _spec_file()
+    with _Stubs(_plate_outcomes(0.04)) as stubs:
+        code = gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+    assert code == 0
+    cand = Path(tmp) / "hc_v1" / "style_candidates"
+    assert sorted(p.name for p in cand.glob("*.png")) == [
+        "0.png", "1.png", "2.png", "3.png", "contact_sheet.png",
+    ]
+    assert len(stubs.prompts) == 4
+
+
+def test_init_sends_no_reference_and_uses_the_plate_prompt():
+    tmp = tempfile.mkdtemp()
+    spec = _spec_file()
+    with _Stubs(_plate_outcomes()) as stubs:
+        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+    assert stubs.references == [None, None, None, None]
+    assert all("a button, an icon, a character" in p for p in stubs.prompts)
+    assert all("#FF00FF" in p for p in stubs.prompts)
+
+
+def test_init_plates_are_saved_raw_without_background_removal():
+    tmp = tempfile.mkdtemp()
+    spec = _spec_file()
+    with _Stubs(_plate_outcomes()):
+        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+    saved = (Path(tmp) / "hc_v1" / "style_candidates" / "0.png").read_bytes()
+    assert saved == PLATES[0]  # byte-identical: nothing was post-processed
+
+
+def test_init_respects_the_cost_ceiling():
+    tmp = tempfile.mkdtemp()
+    spec = _spec_file()
+    with _Stubs(_plate_outcomes(0.04, count=2)) as stubs:
+        code = gen.main(["init", str(spec), "--out-root", tmp, "--no-open",
+                         "--max-cost", "0.05"])
+    assert len(stubs.prompts) == 2  # spent 0.08 after two, third never requested
+    assert code == 0
+
+
+def test_pick_copies_the_chosen_candidate_to_style_bible():
+    tmp = tempfile.mkdtemp()
+    spec = _spec_file()
+    with _Stubs(_plate_outcomes()):
+        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+    assert gen.main(["pick", str(spec), "2", "--out-root", tmp]) == 0
+    assert (Path(tmp) / "hc_v1" / "style_bible.png").read_bytes() == PLATES[2]
+
+
+def test_pick_rejects_an_out_of_range_index():
+    tmp = tempfile.mkdtemp()
+    spec = _spec_file()
+    with _Stubs(_plate_outcomes()):
+        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+    assert gen.main(["pick", str(spec), "9", "--out-root", tmp]) == 1
+
+
+def test_pick_without_init_exits_with_error():
+    tmp = tempfile.mkdtemp()
+    assert gen.main(["pick", str(_spec_file()), "0", "--out-root", tmp]) == 1
+
+
+def test_build_runs_after_init_and_pick():
+    """End-to-end wiring: the bible written by pick is the reference build sends."""
+    tmp = tempfile.mkdtemp()
+    spec = _spec_file()
+    with _Stubs(_plate_outcomes()):
+        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+    gen.main(["pick", str(spec), "1", "--out-root", tmp])
+    with _Stubs([(b"A", 0.0), (b"B", 0.0), (b"C", 0.0)]) as stubs:
+        code = gen.main(["build", str(spec), "--out-root", tmp])
+    assert code == 0
+    assert stubs.references == [PLATES[1], PLATES[1], PLATES[1]]
+
+
+def test_contact_sheet_is_a_two_by_two_grid():
+    tmp = Path(tempfile.mkdtemp())
+    paths = []
+    for i in range(4):
+        p = tmp / f"{i}.png"
+        Image.new("RGB", (100, 100), (i * 60, 0, 0)).save(p)
+        paths.append(p)
+    sheet = gen.contact_sheet(paths, tmp / "sheet.png")
+    with Image.open(sheet) as img:
+        assert img.size == (200, 200)
+
+
+def test_contact_sheet_handles_fewer_than_four_plates():
+    """init stops early on a cost ceiling, so the sheet must cope with 2 images."""
+    tmp = Path(tempfile.mkdtemp())
+    paths = []
+    for i in range(2):
+        p = tmp / f"{i}.png"
+        Image.new("RGB", (100, 100), (0, i * 60, 0)).save(p)
+        paths.append(p)
+    sheet = gen.contact_sheet(paths, tmp / "sheet.png")
+    with Image.open(sheet) as img:
+        assert img.size == (200, 200)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

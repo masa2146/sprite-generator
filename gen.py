@@ -10,9 +10,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+from PIL import Image
 
 import config
 import orclient
@@ -21,6 +25,7 @@ import post
 EST_COST = 0.04          # per-image estimate for --dry-run only
 DEFAULT_MAX_COST = 5.00
 WORKERS = 4              # API calls are I/O bound; rembg stays on the main thread
+PLATE_COUNT = 4          # style plate candidates produced by `init`
 
 
 def select_assets(assets, only):
@@ -193,6 +198,99 @@ def cmd_build(args):
     return 1 if (failed or stopped_early or not manifest_ok) else 0
 
 
+def contact_sheet(paths, out_path):
+    """Compose candidate images into a 2x2 grid so they can be compared at a glance."""
+    images = [Image.open(p).convert("RGB") for p in paths]
+    cell_w = max(im.width for im in images)
+    cell_h = max(im.height for im in images)
+    sheet = Image.new("RGB", (cell_w * 2, cell_h * 2), (24, 24, 24))
+    for i, im in enumerate(images):
+        sheet.paste(im, ((i % 2) * cell_w, (i // 2) * cell_h))
+    sheet.save(out_path)
+    for im in images:
+        im.close()
+    return out_path
+
+
+def cmd_init(args):
+    try:
+        pack = config.load_pack(
+            args.spec, base_url=args.base_url, model=args.model,
+            out_root=Path(args.out_root),
+        )
+    except config.SpecError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if not pack.plate_prompt.strip():
+        print("error: [style] plate_prompt is empty — it should show a button, "
+              "an icon and a character together", file=sys.stderr)
+        return 1
+
+    if _missing_key(pack):
+        return 1
+
+    pack.candidates_dir.mkdir(parents=True, exist_ok=True)
+    prompt = pack.plate_full_prompt()
+    written = []
+    spent = 0.0
+    cost_available = True
+
+    # Sequential on purpose: four requests, and stopping at the ceiling matters
+    # more than shaving a few seconds.
+    for i in range(PLATE_COUNT):
+        if cost_available and spent >= args.max_cost:
+            print(f"stopped: cost ceiling ${args.max_cost:.2f} reached")
+            break
+        try:
+            # Plates carry no reference image: this is where the style is born.
+            png, cost, _raw = orclient.generate(pack, prompt, seed=i)
+        except (orclient.ApiError, orclient.ImageMissing) as exc:
+            print(f"[plate {i}] failed — {exc}", file=sys.stderr)
+            continue
+        target = pack.candidates_dir / f"{i}.png"
+        target.write_bytes(png)  # raw, no background removal
+        written.append(target)
+        print(f"[plate {i}] ok")
+        if cost is None:
+            cost_available = False
+        else:
+            spent += cost
+
+    if not written:
+        print("error: no plates were generated", file=sys.stderr)
+        return 1
+
+    sheet = contact_sheet(written, pack.candidates_dir / "contact_sheet.png")
+    print(f"\n{len(written)} plates → {sheet}")
+    print(f"pick one:  python gen.py pick {args.spec} <0-{len(written) - 1}>")
+    if not args.no_open:
+        webbrowser.open(Path(sheet).resolve().as_uri())
+    return 0
+
+
+def cmd_pick(args):
+    try:
+        pack = config.load_pack(
+            args.spec, base_url=args.base_url, model=args.model,
+            out_root=Path(args.out_root),
+        )
+    except config.SpecError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    candidate = pack.candidates_dir / f"{args.index}.png"
+    if not candidate.exists():
+        print(f"error: {candidate} not found — run `init` first", file=sys.stderr)
+        return 1
+
+    pack.out_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(candidate, pack.style_bible)
+    print(f"style bible locked: {pack.style_bible}")
+    print(f"now run:  python gen.py build {args.spec}")
+    return 0
+
+
 def _add_common(sub):
     sub.add_argument("spec")
     sub.add_argument("--base-url", default=None, help="override [api] base_url")
@@ -212,6 +310,19 @@ def main(argv=None):
     build.add_argument("--max-cost", type=float, default=DEFAULT_MAX_COST,
                        help=f"USD ceiling (default {DEFAULT_MAX_COST})")
     build.set_defaults(func=cmd_build)
+
+    init = subs.add_parser("init", help="generate style plate candidates")
+    _add_common(init)
+    init.add_argument("--max-cost", type=float, default=DEFAULT_MAX_COST,
+                      help=f"USD ceiling (default {DEFAULT_MAX_COST})")
+    init.add_argument("--no-open", action="store_true",
+                      help="do not open the contact sheet in a browser")
+    init.set_defaults(func=cmd_init)
+
+    pick = subs.add_parser("pick", help="lock a candidate as the pack's style bible")
+    _add_common(pick)
+    pick.add_argument("index", type=int, help="candidate number shown by init")
+    pick.set_defaults(func=cmd_pick)
 
     args = parser.parse_args(argv)
     return args.func(args)
