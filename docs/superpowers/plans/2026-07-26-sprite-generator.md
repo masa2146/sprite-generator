@@ -1023,7 +1023,7 @@ from PIL import Image
 
 import gen
 import orclient
-from config import Asset, Pack
+from config import Asset
 
 
 def _png(color=(10, 20, 30)):
@@ -1035,6 +1035,7 @@ def _png(color=(10, 20, 30)):
 
 SPEC = """
 [api]
+base_url = "http://svc/v1"
 key_env = ""
 [pack]
 model = "m/model"
@@ -1059,14 +1060,6 @@ def _spec_file(text=SPEC):
     p = d / "hc_v1.toml"
     p.write_text(text)
     return p
-
-
-def _pack(tmp):
-    return Pack(
-        name="t", base_url="http://svc/v1", key_env="", model="m/model",
-        style_prefix="styled", plate_prompt="plate",
-        assets=[Asset(id="a", prompt="p")], out_root=Path(tmp),
-    )
 
 
 class _Stubs:
