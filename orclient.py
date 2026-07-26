@@ -34,6 +34,22 @@ class ImageMissing(Exception):
         self.raw = raw
 
 
+def _sniff_mime(data: bytes) -> str:
+    """Guess the image MIME type from magic bytes so the declared type matches
+    what was actually returned. A provider may hand back JPEG or WebP even
+    though we always ask for PNG; declaring it as image/png regardless can get
+    the whole request rejected by a provider that validates the MIME type."""
+    if data.startswith(b"\x89PNG"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith(b"GIF8"):
+        return "image/gif"
+    return "image/png"  # unknown: fall back to the previous default
+
+
 def build_payload(
     model: str,
     prompt: str,
@@ -43,8 +59,9 @@ def build_payload(
     content: list[dict] = [{"type": "text", "text": prompt}]
     if reference_png:
         b64 = base64.b64encode(reference_png).decode()
+        mime = _sniff_mime(reference_png)
         content.append(
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
         )
     body = {
         "model": model,
@@ -106,7 +123,17 @@ def generate(
 
     last_error: ApiError | None = None
     for attempt in range(retries):
-        resp = requests.post(url, json=payload, headers=headers, timeout=_TIMEOUT)
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=_TIMEOUT)
+        except requests.exceptions.RequestException as exc:
+            # Timeout, connection reset, DNS failure, ... With a 180s timeout on
+            # image generation, a timeout is the single most likely transient
+            # failure — treat it like a 5xx and retry with the same backoff.
+            last_error = ApiError(f"{type(exc).__name__}: {exc}")
+            if attempt < retries - 1:
+                sleeper(2 ** (attempt + 1))
+            continue
+
         if resp.status_code == 200:
             body = resp.json()
             return parse_image(body), response_cost(body), body
@@ -120,4 +147,6 @@ def generate(
         # Other 4xx: bad prompt, unknown model, bad key. Retrying is pointless.
         raise ApiError(f"HTTP {resp.status_code}: {resp.text[:200]}", resp.status_code)
 
-    raise last_error
+    raise last_error if last_error is not None else ApiError(
+        f"generate() called with retries={retries}: no attempt was made"
+    )
