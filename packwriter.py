@@ -43,7 +43,7 @@ def _mask_multiline_strings(text: str) -> str:
     return "".join(chars)
 
 
-def _toml_string(value: str) -> str:
+def toml_string(value: str) -> str:
     """Encode a Python string as a TOML basic string.
 
     TOML basic strings use the same escapes as JSON, so json.dumps produces a
@@ -51,6 +51,9 @@ def _toml_string(value: str) -> str:
     would otherwise break the file.
     """
     return json.dumps(value)
+
+
+_toml_string = toml_string      # existing internal callers
 
 
 def _prefix_literal(value: str) -> str:
