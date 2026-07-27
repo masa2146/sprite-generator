@@ -289,6 +289,99 @@ def test_paths_derive_from_pack_name():
     assert pack.manifest_path == Path("/tmp/outroot/hc_v1/manifest.json")
 
 
+# --- [vision] section -------------------------------------------------------
+
+VISION_SPEC = """
+[api]
+base_url = "https://openrouter.ai/api/v1"
+key_env  = "OPENROUTER_API_KEY"
+
+[vision]
+base_url = "http://localhost:4000/v1"
+key_env  = "OMNIROUTE_API_KEY"
+model    = "anthropic/claude-sonnet-5"
+
+[pack]
+model = "bytedance-seed/seedream-4.5"
+
+[style]
+prefix = "p"
+
+[[assets]]
+id = "a"
+prompt = "q"
+"""
+
+
+def test_vision_section_is_read():
+    _clear_env()
+    pack = load_pack(_write(VISION_SPEC))
+    assert pack.vision_base_url == "http://localhost:4000/v1"
+    assert pack.vision_key_env == "OMNIROUTE_API_KEY"
+    assert pack.vision_model == "anthropic/claude-sonnet-5"
+
+
+def test_vision_falls_back_to_api_section_when_absent():
+    _clear_env()
+    no_vision = VISION_SPEC.replace('''[vision]
+base_url = "http://localhost:4000/v1"
+key_env  = "OMNIROUTE_API_KEY"
+model    = "anthropic/claude-sonnet-5"
+
+''', "")
+    pack = load_pack(_write(no_vision))
+    assert pack.vision_base_url == "https://openrouter.ai/api/v1"
+    assert pack.vision_key_env == "OPENROUTER_API_KEY"
+    assert pack.vision_model is None
+
+
+def test_vision_partial_section_falls_back_per_field():
+    _clear_env()
+    partial = VISION_SPEC.replace('''base_url = "http://localhost:4000/v1"
+key_env  = "OMNIROUTE_API_KEY"
+model    = "anthropic/claude-sonnet-5"''', 'model    = "some/vision-model"')
+    pack = load_pack(_write(partial))
+    assert pack.vision_base_url == "https://openrouter.ai/api/v1"   # from [api]
+    assert pack.vision_key_env == "OPENROUTER_API_KEY"              # from [api]
+    assert pack.vision_model == "some/vision-model"                 # from [vision]
+
+
+def test_vision_cli_overrides_beat_the_spec():
+    _clear_env()
+    pack = load_pack(_write(VISION_SPEC),
+                     vision_base_url="http://cli/v1", vision_model="cli/model")
+    assert pack.vision_base_url == "http://cli/v1"
+    assert pack.vision_model == "cli/model"
+
+
+def test_vision_api_key_reads_its_own_env_var():
+    _clear_env()
+    pack = load_pack(_write(VISION_SPEC))
+    assert pack.vision_api_key() is None
+    os.environ["OMNIROUTE_API_KEY"] = "sk-vision"
+    try:
+        assert pack.vision_api_key() == "sk-vision"
+    finally:
+        del os.environ["OMNIROUTE_API_KEY"]
+
+
+def test_vision_empty_key_env_means_no_key():
+    _clear_env()
+    spec = VISION_SPEC.replace('key_env  = "OMNIROUTE_API_KEY"', 'key_env  = ""')
+    assert load_pack(_write(spec)).vision_api_key() is None
+
+
+def test_vision_key_env_credential_guard():
+    _clear_env()
+    spec = VISION_SPEC.replace('key_env  = "OMNIROUTE_API_KEY"',
+                               'key_env  = "sk-or-v1-abcdef1234567890"')
+    try:
+        load_pack(_write(spec))
+        raise AssertionError("expected SpecError")
+    except SpecError as exc:
+        assert "key_env" in str(exc)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

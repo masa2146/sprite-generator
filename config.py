@@ -54,6 +54,9 @@ class Pack:
     out_root: Path = Path("out")
     transport: str = DEFAULT_TRANSPORT
     default_aspect_ratio: str = "1:1"  # [defaults] aspect_ratio — style plates use this
+    vision_base_url: str = ""
+    vision_key_env: str = ""
+    vision_model: str | None = None
 
     @property
     def out_dir(self) -> Path:
@@ -74,6 +77,10 @@ class Pack:
     def api_key(self) -> str | None:
         """Key comes from the environment only, never from the spec file."""
         return os.environ.get(self.key_env) if self.key_env else None
+
+    def vision_api_key(self) -> str | None:
+        """Vision may use a different endpoint and key than image generation."""
+        return os.environ.get(self.vision_key_env) if self.vision_key_env else None
 
     def full_prompt(self, asset: Asset) -> str:
         """Prompt wording only — no aspect-ratio text. How aspect ratio is
@@ -97,11 +104,34 @@ class Pack:
         return zlib.crc32(asset_id.encode()) % (2**31)
 
 
+def _check_key_env(key_env, where: str) -> None:
+    """Reject a key value pasted where an env var *name* belongs.
+
+    Users have pasted a live key here more than once; the silent consequence is
+    no Authorization header and a confusing 401, so fail loudly at load time.
+    """
+    if not key_env:
+        return  # explicitly empty: this endpoint needs no key
+    if (
+        not isinstance(key_env, str)
+        or key_env.startswith("sk-")
+        or not _VALID_ENV_NAME.fullmatch(key_env)
+    ):
+        raise SpecError(
+            f"{where} key_env looks like a credential value, not an environment "
+            f"variable name: {key_env!r}. key_env takes the NAME of an env var that "
+            'holds the key, e.g. key_env = "OPENROUTER_API_KEY", with the key itself '
+            "set via `export OPENROUTER_API_KEY=sk-...` — never the key itself in the spec."
+        )
+
+
 def load_pack(
     spec_path,
     base_url: str | None = None,
     model: str | None = None,
     transport: str | None = None,
+    vision_base_url: str | None = None,
+    vision_model: str | None = None,
     out_root: Path = Path("out"),
 ) -> Pack:
     """Load a TOML spec. Precedence: CLI arg > spec file > env var > default."""
@@ -143,17 +173,15 @@ def load_pack(
 
     # key_env may be explicitly "" to mean "this endpoint needs no key".
     key_env = api["key_env"] if "key_env" in api else DEFAULT_KEY_ENV
-    if key_env and (
-        not isinstance(key_env, str)
-        or key_env.startswith("sk-")
-        or not _VALID_ENV_NAME.fullmatch(key_env)
-    ):
-        raise SpecError(
-            f"key_env looks like a credential value, not an environment variable "
-            f"name: {key_env!r}. key_env takes the NAME of an env var that holds "
-            'the key, e.g. key_env = "OPENROUTER_API_KEY", with the key itself set '
-            "via `export OPENROUTER_API_KEY=sk-...` — never the key itself in the spec."
-        )
+    _check_key_env(key_env, "[api]")
+
+    vision = raw.get("vision", {})
+    resolved_vision_base = (
+        vision_base_url or vision.get("base_url") or resolved_base
+    )
+    resolved_vision_model = vision_model or vision.get("model")
+    vision_key_env = vision["key_env"] if "key_env" in vision else key_env
+    _check_key_env(vision_key_env, "[vision]")
 
     default_ratio = defaults.get("aspect_ratio", "1:1")
     assets: list[Asset] = []
@@ -187,4 +215,7 @@ def load_pack(
         out_root=Path(out_root),
         transport=resolved_transport,
         default_aspect_ratio=default_ratio,
+        vision_base_url=resolved_vision_base,
+        vision_key_env=vision_key_env,
+        vision_model=resolved_vision_model,
     )
