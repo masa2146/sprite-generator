@@ -3,6 +3,8 @@ import os
 import tempfile
 from pathlib import Path
 
+import envfile
+
 from config import (
     BG_CLAUSE,
     DEFAULT_BASE_URL,
@@ -394,10 +396,15 @@ _ENV_VARS = (
     "SPRITEGEN_VISION_API_KEY", "SPRITEGEN_VISION_MODEL", "OPENROUTER_API_KEY",
 )
 
+_ABSENT_ENV = Path(tempfile.mkdtemp()) / "absent.env"
+
 
 def _clear_spritegen():
+    """Empty environment AND no .env — env_pack loads the file itself, so a
+    real .env in the project root would fill variables these tests leave empty."""
     for k in _ENV_VARS:
         os.environ.pop(k, None)
+    envfile.DEFAULT_ENV_PATH = _ABSENT_ENV
 
 
 def test_env_pack_reads_the_environment():
@@ -492,6 +499,21 @@ def test_env_pack_defaults_transport_and_base_url():
         p = env_pack()
         assert p.transport == DEFAULT_TRANSPORT
         assert p.base_url == DEFAULT_BASE_URL
+    finally:
+        _clear_spritegen()
+
+
+def test_env_pack_ignores_a_dot_env_when_the_environment_is_explicit():
+    """A .env must not override a variable the caller set."""
+    _clear_spritegen()
+    d = Path(tempfile.mkdtemp())
+    envpath = d / ".env"
+    envpath.write_text("SPRITEGEN_MODEL=from-file\n", encoding="utf-8")
+    envfile.DEFAULT_ENV_PATH = envpath
+    os.environ["SPRITEGEN_MODEL"] = "from-environment"
+    try:
+        from config import env_pack
+        assert env_pack().model == "from-environment"
     finally:
         _clear_spritegen()
 
