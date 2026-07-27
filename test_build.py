@@ -809,6 +809,27 @@ def test_analyze_copies_the_image_as_the_style_bible():
     assert bible.read_bytes() == img.read_bytes()
 
 
+def test_analyze_style_bible_write_failure_reports_the_partial_state():
+    """The pack write happens before the style-bible copy; if the copy then
+    fails, the pack is already updated on disk. That must be reported plainly
+    (not a bare traceback) and the run must still exit 1."""
+    tmp = tempfile.mkdtemp()
+    spec, img = _analyze_pack(tmp)
+    # A file where a directory is expected: mkdir(parents=True) under it raises
+    # NotADirectoryError (a real OSError), no mocking needed.
+    blocker = Path(tmp) / "blocker"
+    blocker.write_text("not a directory")
+    with _VisionStub(result=ANALYSIS_SCHEMA):
+        code = gen.main(["analyze", str(img), "--pack", str(spec),
+                         "--out-root", str(blocker)])
+    assert code == 1
+    import tomllib
+    with open(spec, "rb") as fh:
+        written = tomllib.load(fh)["style"]["prefix"]
+    assert "soft 3D render, glossy plastic" in written  # the pack write did land
+    assert not (blocker / "hc_v1" / "style_bible.png").exists()
+
+
 def test_analyze_add_asset_appends_the_subject():
     tmp = tempfile.mkdtemp()
     spec, img = _analyze_pack(tmp)

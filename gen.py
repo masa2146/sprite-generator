@@ -416,8 +416,14 @@ def cmd_analyze(args):
     if args.add_asset:
         print(f"wrote [[assets]] {args.add_asset} -> {args.pack}")
 
-    pack.out_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(image_path, pack.style_bible)
+    try:
+        pack.out_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(image_path, pack.style_bible)
+    except OSError as exc:
+        print(f"error: pack was updated but the style bible could not be written "
+              f"({exc}); copy {image_path} to {pack.style_bible} yourself, or "
+              "re-run analyze", file=sys.stderr)
+        return 1
     print(f"wrote style bible     -> {pack.style_bible}")
     print(f"\nnow run:  python3 gen.py build {args.pack}")
     return 0
