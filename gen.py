@@ -1,9 +1,10 @@
 """Sprite generator CLI.
 
 Commands:
-    init <spec>   generate style plate candidates
-    pick <spec> N lock candidate N as the pack's style bible
-    build <spec>  generate every asset in the spec
+    init <spec>     generate style plate candidates
+    pick <spec> N   lock candidate N as the pack's style bible
+    build <spec>    generate every asset in the spec
+    analyze <image> derive the style prefix (and style bible) from a reference image
 """
 
 from __future__ import annotations
@@ -344,8 +345,12 @@ def cmd_pick(args):
         print(f"error: {candidate} not found — run `init` first", file=sys.stderr)
         return 1
 
-    pack.out_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(candidate, pack.style_bible)
+    try:
+        pack.out_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(candidate, pack.style_bible)
+    except OSError as exc:
+        print(f"error: cannot write {pack.style_bible}: {exc}", file=sys.stderr)
+        return 1
     print(f"style bible locked: {pack.style_bible}")
     print(f"now run:  python3 gen.py build {args.spec}")
     return 0
@@ -369,6 +374,13 @@ def cmd_analyze(args):
         print(f"error: cannot read {image_path}: {exc}", file=sys.stderr)
         return 1
 
+    # Same check build/init do for [api] key_env, against the vision key instead —
+    # analyze always calls the vision endpoint, dry-run included, so this applies
+    # unconditionally rather than only outside --dry-run.
+    if pack.vision_key_env and pack.vision_api_key() is None:
+        print(f"error: ${pack.vision_key_env} is not set", file=sys.stderr)
+        return 1
+
     try:
         schema, _raw = vision.analyze(pack, image_bytes)
     except vision.AnalysisError as exc:
@@ -377,9 +389,13 @@ def cmd_analyze(args):
         if exc.raw:
             dump = image_path.with_suffix(image_path.suffix + ".analysis-error.txt")
             try:
-                dump.write_text(exc.raw)
+                dump.write_text(exc.raw, encoding="utf-8")
                 print(f"error: {exc} (raw reply written to {dump})", file=sys.stderr)
-            except OSError:
+            except Exception:
+                # Raw model text is not guaranteed ASCII (curly quotes, em-dashes),
+                # so a locale-encoding failure here (UnicodeEncodeError, not an
+                # OSError) must not swallow the analysis error the dump exists to
+                # record.
                 print(f"error: {exc}", file=sys.stderr)
         else:
             print(f"error: {exc}", file=sys.stderr)
@@ -406,7 +422,13 @@ def cmd_analyze(args):
         packwriter.update_pack(
             args.pack,
             prefix=prefix,
-            new_asset=(args.add_asset, repro) if args.add_asset else None,
+            # Store only the subject, matching every other asset in the pack:
+            # the style prefix is applied at build time by full_prompt(), not
+            # frozen into the asset's own prompt. Embedding `repro` (subject +
+            # prefix) would double the style now and freeze a stale copy of it
+            # forever, silently drifting from the pack the moment the prefix
+            # changes.
+            new_asset=(args.add_asset, schema["subject"]) if args.add_asset else None,
         )
     except packwriter.PackWriteError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -479,7 +501,8 @@ def main(argv=None):
     analyze.add_argument("--add-asset", default=None, metavar="ID",
                          help="also append the detected subject as a new asset")
     analyze.add_argument("--dry-run", action="store_true",
-                         help="print the analysis, write nothing")
+                         help="print the analysis, write nothing "
+                              "(the vision call is still made and still costs)")
     analyze.set_defaults(func=cmd_analyze)
 
     args = parser.parse_args(argv)

@@ -557,6 +557,19 @@ def test_pick_without_init_exits_with_error():
     assert gen.main(["pick", str(_spec_file()), "0", "--out-root", tmp]) == 1
 
 
+def test_pick_style_bible_path_blocked_reports_an_error_not_a_traceback():
+    """Same guard cmd_analyze has around its style-bible copy: a blocked
+    destination (here, a directory sitting where style_bible.png must go)
+    must produce a clean error and exit 1, not an unhandled OSError."""
+    tmp = tempfile.mkdtemp()
+    spec = _spec_file()
+    with _Stubs(_plate_outcomes()):
+        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+    style_bible = Path(tmp) / "hc_v1" / "style_bible.png"
+    style_bible.mkdir()  # a directory where pick needs to write a file
+    assert gen.main(["pick", str(spec), "0", "--out-root", tmp]) == 1
+
+
 def test_build_runs_after_init_and_pick():
     """End-to-end wiring: the bible written by pick is the reference build sends."""
     tmp = tempfile.mkdtemp()
@@ -767,9 +780,9 @@ class _VisionStub:
         gen.vision.analyze = self._orig
 
 
-def _analyze_pack(tmp):
+def _analyze_pack(tmp, text=SPEC):
     """A spec on disk plus a reference image; returns (spec_path, image_path)."""
-    spec = _spec_file(SPEC)
+    spec = _spec_file(text)
     img = Path(tmp) / "ref.png"
     img.write_bytes(_png((7, 8, 9)))
     return spec, img
@@ -798,6 +811,16 @@ def test_analyze_writes_the_style_prefix():
         written = tomllib.load(fh)["style"]["prefix"]
     assert "soft 3D render, glossy plastic" in written
     assert ANALYSIS_SCHEMA["subject"] not in written   # subject must not leak in
+
+    # Seam test: reload the pack the way `build` actually does and check the
+    # written prefix reaches full_prompt() for an existing asset. Every suite
+    # otherwise stubs the pack-file -> load_pack -> full_prompt path away, which
+    # is exactly how the --add-asset bug (frozen prefix baked into one asset's
+    # own prompt) went unnoticed — this closes that seam.
+    import config
+    reloaded = config.load_pack(spec, out_root=Path(tmp))
+    btn_play = next(a for a in reloaded.assets if a.id == "btn_play")
+    assert reloaded.full_prompt(btn_play).startswith("soft 3D render, glossy plastic")
 
 
 def test_analyze_copies_the_image_as_the_style_bible():
@@ -831,6 +854,12 @@ def test_analyze_style_bible_write_failure_reports_the_partial_state():
 
 
 def test_analyze_add_asset_appends_the_subject():
+    """The stored asset prompt must be the bare subject, matching every other
+    asset in the pack — the style prefix is applied at build time by
+    full_prompt(), not frozen into this one asset's own prompt. Embedding the
+    reproduction prompt (subject + prefix) here would double the style now and
+    freeze a stale copy of the prefix, silently drifting the moment [style]
+    prefix is edited or re-analyzed."""
     tmp = tempfile.mkdtemp()
     spec, img = _analyze_pack(tmp)
     with _VisionStub(result=ANALYSIS_SCHEMA):
@@ -841,7 +870,10 @@ def test_analyze_add_asset_appends_the_subject():
     with open(spec, "rb") as fh:
         assets = tomllib.load(fh)["assets"]
     assert assets[-1]["id"] == "coin_ref"
-    assert assets[-1]["prompt"].startswith(ANALYSIS_SCHEMA["subject"])
+    assert assets[-1]["prompt"] == ANALYSIS_SCHEMA["subject"]
+    # A regression back to the reproduction prompt (subject + ", " + style
+    # prefix) would fail here: no style field belongs in the stored prompt.
+    assert "soft 3D render, glossy plastic" not in assets[-1]["prompt"]
 
 
 def test_analyze_without_add_asset_leaves_assets_alone():
@@ -874,6 +906,22 @@ def test_analyze_missing_image_exits_cleanly():
         code = gen.main(["analyze", str(Path(tmp) / "nope.png"),
                          "--pack", str(spec), "--out-root", tmp])
     assert code == 1
+
+
+def test_analyze_missing_vision_key_exits_before_any_request():
+    """Same diagnosis build/init give for a missing [api] key_env: fail fast
+    with a clear message rather than firing a keyless request and reporting a
+    confusing HTTP 401 from the vision endpoint."""
+    tmp = tempfile.mkdtemp()
+    spec, img = _analyze_pack(
+        tmp, SPEC.replace("[pack]", '[vision]\nkey_env = "ABSENT_VISION_KEY"\n\n[pack]')
+    )
+    os.environ.pop("ABSENT_VISION_KEY", None)
+    with _VisionStub(result=ANALYSIS_SCHEMA) as stub:
+        code = gen.main(["analyze", str(img), "--pack", str(spec),
+                         "--out-root", tmp, "--vision-model", "v/model"])
+    assert code == 1
+    assert stub.images == []  # no request was made
 
 
 def test_analyze_failure_writes_the_raw_reply_and_leaves_the_pack_alone():
