@@ -69,8 +69,10 @@ Output goes to `out/make/<timestamp>-<slug>.png` with a `.json` beside it record
 schema, the full prompt, the model, the seed and the cost — `make` has no pack file, so
 that sidecar is the only record of how a result was produced.
 
-`--dry-run` prints the analysis and prompt and generates nothing. `--no-cutout` skips the
-backdrop clause, the alpha cut and the trim, for full-bleed backgrounds and tiles.
+`--dry-run` prints the analysis and prompt and generates nothing — with `-i`, the vision
+call is still made and still costs; there is no way to print the analysis without making
+it. `--no-cutout` skips the backdrop clause, the alpha cut and the trim, for full-bleed
+backgrounds and tiles.
 
 ### Configuration
 
