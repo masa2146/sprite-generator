@@ -1,0 +1,152 @@
+"""Targeted edits to a TOML pack file.
+
+tomllib is read-only, and re-serializing a parsed pack would delete every
+comment in it — including the ones documenting cutout and the transport
+choice. So we replace exactly the bytes we mean to change and leave the rest
+of the file untouched, then verify the result still parses before keeping it.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import tomllib
+from pathlib import Path
+
+
+class PackWriteError(Exception):
+    """The pack could not be updated; the file on disk is unchanged."""
+
+
+# A section header at the start of a line: [style], [[assets]], ...
+_SECTION = re.compile(r"^\[", re.M)
+# prefix = "..." or prefix = """...""" (multi-line), captured as one value.
+_PREFIX = re.compile(
+    r'^([ \t]*prefix[ \t]*=[ \t]*)("""(?:.|\n)*?"""|"(?:[^"\\]|\\.)*")',
+    re.M,
+)
+
+
+def _toml_string(value: str) -> str:
+    """Encode a Python string as a TOML basic string.
+
+    TOML basic strings use the same escapes as JSON, so json.dumps produces a
+    valid one — and it handles embedded quotes, backslashes and newlines that
+    would otherwise break the file.
+    """
+    return json.dumps(value)
+
+
+def _prefix_literal(value: str) -> str:
+    """Multi-line form when it is safe, quoted form when it is not."""
+    if '"""' in value or "\\" in value:
+        return _toml_string(value)
+    return f'"""\n{value.strip()}\n"""'
+
+
+def _section_body_span(text: str, header: str) -> tuple[int, int] | None:
+    """Character span of a section's body, from after its header to the next one."""
+    match = re.search(rf"^\[{re.escape(header)}\][ \t]*$", text, re.M)
+    if not match:
+        return None
+    start = match.end()
+    nxt = _SECTION.search(text, start)
+    return start, (nxt.start() if nxt else len(text))
+
+
+def _set_style_prefix(text: str, prefix: str) -> str:
+    span = _section_body_span(text, "style")
+    literal = _prefix_literal(prefix)
+
+    if span is None:
+        # No [style] section. Insert one before the first [[assets]] — TOML
+        # table order matters, and a [style] table after [[assets]] would be
+        # parsed as belonging to the last asset.
+        block = f"[style]\nprefix = {literal}\n\n"
+        first_asset = re.search(r"^\[\[assets\]\]", text, re.M)
+        if first_asset:
+            return text[: first_asset.start()] + block + text[first_asset.start() :]
+        return text.rstrip("\n") + "\n\n" + block
+
+    start, end = span
+    body = text[start:end]
+    replaced, count = _PREFIX.subn(lambda m: m.group(1) + literal, body, count=1)
+    if count == 0:
+        # [style] exists but has no prefix key — add one at the top of the body.
+        replaced = f"\nprefix = {literal}\n" + body.lstrip("\n")
+    return text[:start] + replaced + text[end:]
+
+
+def _append_asset(text: str, asset_id: str, prompt: str) -> str:
+    """Append a new [[assets]] block. Appending never shifts existing lines."""
+    block = (
+        f"\n[[assets]]\n"
+        f"id     = {_toml_string(asset_id)}\n"
+        f"prompt = {_toml_string(prompt)}\n"
+    )
+    return text.rstrip("\n") + "\n" + block
+
+
+def _parse(path: Path) -> dict:
+    with path.open("rb") as fh:
+        return tomllib.load(fh)
+
+
+def update_pack(
+    path,
+    prefix: str | None = None,
+    new_asset: tuple[str, str] | None = None,
+) -> None:
+    """Update a pack's style prefix and/or append an asset.
+
+    Atomic in effect: the file either ends up with both edits applied and
+    verified, or byte-identical to how it started.
+    """
+    path = Path(path)
+    if prefix is None and new_asset is None:
+        raise PackWriteError("update_pack: nothing to write")
+
+    try:
+        original = path.read_text()
+    except OSError as exc:
+        raise PackWriteError(f"cannot read {path}: {exc}")
+
+    try:
+        existing = _parse(path)
+    except tomllib.TOMLDecodeError as exc:
+        raise PackWriteError(f"{path} is not valid TOML to begin with: {exc}")
+
+    if new_asset is not None:
+        asset_id, asset_prompt = new_asset
+        if any(a.get("id") == asset_id for a in existing.get("assets", [])):
+            raise PackWriteError(
+                f"asset id {asset_id!r} already exists in {path} — pick another id "
+                "(a duplicate id makes the pack unloadable)"
+            )
+
+    text = original
+    if prefix is not None:
+        text = _set_style_prefix(text, prefix)
+    if new_asset is not None:
+        text = _append_asset(text, new_asset[0], new_asset[1])
+
+    backup = path.with_suffix(path.suffix + ".bak")
+    backup.write_text(original)
+    path.write_text(text)
+
+    try:
+        written = _parse(path)
+        if prefix is not None and written.get("style", {}).get("prefix", "").strip() != prefix.strip():
+            raise ValueError("prefix did not round-trip")
+        if new_asset is not None:
+            ids = [a.get("id") for a in written.get("assets", [])]
+            if new_asset[0] not in ids:
+                raise ValueError(f"asset {new_asset[0]!r} missing after write")
+            if len(ids) != len(existing.get("assets", [])) + 1:
+                raise ValueError("asset count changed unexpectedly")
+    except Exception as exc:
+        path.write_text(original)
+        raise PackWriteError(
+            f"write to {path} did not verify ({exc}); the original has been restored "
+            f"(a copy is also at {backup})"
+        )
