@@ -22,6 +22,18 @@ STYLE_FIELDS = ("render", "camera", "lighting", "palette", "linework", "realism"
 # reads best last, after the visual description it tints.
 _JOIN_ORDER = ("render", "camera", "lighting", "linework", "realism", "palette")
 
+# Subject-side fields: what the object IS and how it is built. These never
+# enter a pack's [style] prefix — that prefix is applied to every asset, and
+# one object's geometry in it would drag the whole set toward that shape.
+SUBJECT_FIELDS = ("subject", "form", "detail")
+
+# Full single-object prompt order: identity, then geometry, then surface
+# detail, then style, with palette last.
+PROMPT_ORDER = (
+    "subject", "form", "detail",
+    "render", "camera", "lighting", "linework", "realism", "palette",
+)
+
 ANALYSIS_PROMPT = """Analyse this image and describe it as JSON, with exactly this shape:
 
 {
@@ -33,13 +45,23 @@ ANALYSIS_PROMPT = """Analyse this image and describe it as JSON, with exactly th
     "linework": "outlines and geometry, e.g. no outline, rounded geometry, soft bevels",
     "realism":  "stylisation axis, e.g. stylized cartoon, not photorealistic"
   },
-  "subject": "what the image actually depicts, as a generation prompt would phrase it"
+  "form": "the object's construction: how many parts, their arrangement and proportions, e.g. two stacked parts, a ribbed panel above a rounded box with a vertical slot",
+  "detail": "distinguishing smaller features: rim thickness, bevels, surface finish, markings",
+  "subject": "what the object IS, phrased as an image-generation prompt would name it"
 }
 
 Rules:
-- "style" describes HOW the image looks and must not name the subject.
-- "subject" describes WHAT it depicts, phrased as an image-generation prompt.
+- "style" describes HOW it looks and must not name the subject.
+- "form" describes the object's structure precisely enough to rebuild it from words alone.
+- "subject" names WHAT it is, briefly.
 - Every field must be filled in. Reply with JSON only, no commentary."""
+
+USER_OVERRIDE_CLAUSE = """
+
+The user also asked for: {text}
+
+Where the user's request conflicts with what you see, follow the user. Fill every
+field the user did not speak to from the image as normal."""
 
 _FENCED = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
 # A comma right before a closing brace/bracket: invalid JSON, common model slip.
@@ -105,9 +127,10 @@ def validate_schema(schema: dict) -> list[str]:
             value = style.get(field)
             if not isinstance(value, str) or not value.strip():
                 missing.append(f"style.{field}")
-    subject = schema.get("subject")
-    if not isinstance(subject, str) or not subject.strip():
-        missing.append("subject")
+    for field in ("form", "detail", "subject"):
+        value = schema.get(field)
+        if not isinstance(value, str) or not value.strip():
+            missing.append(field)
     return missing
 
 
@@ -130,7 +153,23 @@ def reproduction_prompt(schema: dict) -> str:
     return f"{schema['subject'].strip()}, {style_prefix(schema)}"
 
 
-def analyze(pack, image_bytes: bytes, retries: int = 3, sleeper=None) -> tuple[dict, str]:
+def object_prompt(schema: dict) -> str:
+    """The full single-object prompt: identity, geometry, detail, then style.
+
+    Unlike style_prefix this deliberately includes subject/form/detail — it
+    describes one object rather than a style shared across a set.
+    """
+    style = schema.get("style") or {}
+    parts = []
+    for field in PROMPT_ORDER:
+        value = schema.get(field) if field in SUBJECT_FIELDS else style.get(field)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    return ", ".join(parts)
+
+
+def analyze(pack, image_bytes: bytes, user_text: str | None = None,
+            retries: int = 3, sleeper=None) -> tuple[dict, str]:
     """Send the image to the vision endpoint. Returns (schema, raw_reply_text)."""
     if not pack.vision_model:
         # Deliberately only two suggestions: load_pack never consults [pack]
@@ -140,12 +179,16 @@ def analyze(pack, image_bytes: bytes, retries: int = 3, sleeper=None) -> tuple[d
             "no vision model: set [vision] model, or pass --vision-model"
         )
 
+    instruction = ANALYSIS_PROMPT
+    if user_text and user_text.strip():
+        instruction += USER_OVERRIDE_CLAUSE.format(text=user_text.strip())
+
     mime = orclient._sniff_mime(image_bytes)
     b64 = base64.b64encode(image_bytes).decode()
     payload = {
         "model": pack.vision_model,
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": ANALYSIS_PROMPT},
+            {"type": "text", "text": instruction},
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
         ]}],
         # Sent explicitly because omitting it is not the same as false on every

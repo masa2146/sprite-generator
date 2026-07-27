@@ -752,6 +752,8 @@ ANALYSIS_SCHEMA = {
         "linework": "no outline, rounded geometry",
         "realism": "stylized cartoon",
     },
+    "form": "a single rounded disc with a thick rim",
+    "detail": "subtle radial shine",
     "subject": "gold coin icon, front view, thick rim",
 }
 

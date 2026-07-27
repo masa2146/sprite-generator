@@ -17,6 +17,8 @@ SCHEMA = {
         "linework": "no outline, rounded geometry",
         "realism": "stylized cartoon, not photorealistic",
     },
+    "form": "a single rounded disc, slightly thicker at the rim",
+    "detail": "subtle radial shine across the face",
     "subject": "gold coin icon, front view, thick rim",
 }
 PNG = b"\x89PNG\r\n\x1a\nFAKE"
@@ -129,10 +131,10 @@ def test_blank_field_counts_as_missing():
     assert vision.validate_schema(bad) == ["style.palette"]
 
 
-def test_missing_style_block_reports_every_style_field():
+def test_missing_blocks_are_reported_per_field():
     assert vision.validate_schema({"subject": "x"}) == [
         f"style.{f}" for f in vision.STYLE_FIELDS
-    ]
+    ] + ["form", "detail"]
 
 
 # --- prompt assembly --------------------------------------------------------
@@ -212,6 +214,91 @@ def test_analyze_rejects_a_pack_with_no_vision_model():
         raise AssertionError("expected AnalysisError")
     except vision.AnalysisError as exc:
         assert "model" in str(exc)
+
+
+# --- schema growth: form + detail -------------------------------------------
+
+FULL = {
+    "style": {
+        "render": "soft 3D render, glossy plastic",
+        "camera": "3/4 front view",
+        "lighting": "top-left key light",
+        "palette": "#FF6B4A #4ECDC4",
+        "linework": "no outline, rounded geometry",
+        "realism": "stylized cartoon",
+    },
+    "form": "two stacked parts: a ribbed panel above a rounded box with a vertical slot",
+    "detail": "thick bevelled rim, soft specular highlight along the top edge",
+    "subject": "a small launcher chute",
+}
+
+
+def test_form_and_detail_are_required():
+    missing = dict(FULL); del missing["form"]
+    assert vision.validate_schema(missing) == ["form"]
+    missing2 = dict(FULL); del missing2["detail"]
+    assert vision.validate_schema(missing2) == ["detail"]
+
+
+def test_blank_form_counts_as_missing():
+    blank = dict(FULL); blank["form"] = "  "
+    assert vision.validate_schema(blank) == ["form"]
+
+
+def test_full_schema_validates():
+    assert vision.validate_schema(FULL) == []
+
+
+def test_object_prompt_uses_the_fixed_order():
+    text = vision.object_prompt(FULL)
+    order = [text.index(v) for v in (
+        FULL["subject"], FULL["form"], FULL["detail"],
+        FULL["style"]["render"], FULL["style"]["camera"], FULL["style"]["lighting"],
+        FULL["style"]["linework"], FULL["style"]["realism"], FULL["style"]["palette"],
+    )]
+    assert order == sorted(order), text
+
+
+def test_object_prompt_starts_with_the_subject():
+    assert vision.object_prompt(FULL).startswith(FULL["subject"])
+
+
+def test_object_prompt_skips_absent_fields_without_breaking_separators():
+    partial = {"subject": "a coin", "style": {"render": "flat vector"}}
+    text = vision.object_prompt(partial)
+    assert text == "a coin, flat vector"
+    assert ", ," not in text
+
+
+def test_style_prefix_still_excludes_form_and_detail():
+    """form/detail describe one object; a shared prefix must not carry them."""
+    prefix = vision.style_prefix(FULL)
+    assert FULL["form"] not in prefix
+    assert FULL["detail"] not in prefix
+    assert FULL["subject"] not in prefix
+
+
+# --- user text override -----------------------------------------------------
+
+def test_analyze_without_user_text_sends_no_override_clause():
+    (schema, _), rec = _run_analyze([_Resp(200, _body(json.dumps(FULL)))])
+    sent = rec.calls[0]["json"]["messages"][0]["content"][0]["text"]
+    assert vision.ANALYSIS_PROMPT in sent
+    assert "user also asked" not in sent.lower()
+
+
+def test_analyze_with_user_text_appends_the_override_clause():
+    import orclient
+    rec = _Recorder([_Resp(200, _body(json.dumps(FULL)))])
+    original = orclient.requests.post
+    orclient.requests.post = rec
+    try:
+        vision.analyze(_pack(), PNG, user_text="make it red", sleeper=lambda s: None)
+    finally:
+        orclient.requests.post = original
+    sent = rec.calls[0]["json"]["messages"][0]["content"][0]["text"]
+    assert "make it red" in sent
+    assert "user" in sent.lower()
 
 
 if __name__ == "__main__":
