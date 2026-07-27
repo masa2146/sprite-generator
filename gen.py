@@ -6,6 +6,7 @@ Commands:
     build <spec>    generate every asset in the spec
     analyze <image> derive the style prefix (and style bible) from a reference image
     make            pack-less one-shot: an image, a text, or both -> one sprite
+    extract <image> find every sprite in an image and write a buildable pack
 """
 
 from __future__ import annotations

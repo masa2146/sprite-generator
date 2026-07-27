@@ -74,6 +74,74 @@ call is still made and still costs; there is no way to print the analysis withou
 it. `--no-cutout` skips the backdrop clause, the alpha cut and the trim, for full-bleed
 backgrounds and tiles.
 
+## Every sprite in one image: `extract`
+
+`make` treats an image as one object. When a screenshot holds a whole set — blocks, a rail,
+a launcher, characters — `extract` pulls them apart:
+
+```bash
+python3 gen.py extract -i screen.png --pack packs/bunny.toml
+```
+
+One vision call returns the shared style plus an object list with bounding boxes. Each box
+is validated, cropped to `refs/`, and written into a pack where **every view is its own
+asset pointing at its own crop**. A labelled contact sheet opens so you can check the crops
+against what they claim to be.
+
+**`extract` generates nothing.** It writes a pack; `build` does the generating:
+
+```bash
+python3 gen.py build packs/bunny.toml --dry-run   # what it will cost
+python3 gen.py build packs/bunny.toml
+```
+
+That split is deliberate: six objects at four views each is 24 images, on the order of $3.
+No single command should spend that quietly.
+
+### Views
+
+Objects the model marks as animated get several views; static ones get one. The pool is
+closed — `front`, `three_quarter`, `side`, `back`, `top_down` — so file names stay
+predictable and the same command twice gives the same set. Assets are named
+`<object>-<view>`.
+
+### When a crop is wrong
+
+Bounding boxes are the weak point of this flow. Three things make a bad one survivable:
+
+- the contact sheet captions each crop with its id, animated state and views, so a wrong
+  crop is visible rather than silent
+- crops stay in `refs/` — fix one by hand and re-run `build`, no second analysis and no
+  second vision charge
+- boxes that fall outside the image, have no area, cover more than 90% of it, or are under
+  16px on a side are rejected and **reported**, never dropped quietly
+
+### Flags
+
+| flag | effect |
+|---|---|
+| `--refs-dir DIR` | where crops go (default: `refs/` beside the pack) |
+| `--max-objects N` | cap (default 12); the rest are reported, not silently dropped |
+| `--no-open` | do not open the contact sheet |
+| `--dry-run` | print what would be written; writes nothing (the vision call still happens and still costs) |
+
+Plus the shared endpoint flags: `--base-url`, `--model`, `--transport`, `--vision-base-url`,
+`--vision-model`, `--out-root`.
+
+`extract` refuses to overwrite an existing pack — a pack you have already pruned by hand is
+the most valuable thing in this flow, and it refuses before spending the vision call.
+
+### Per-asset references
+
+`extract` writes them, but you can use the field by hand in any pack:
+
+```toml
+[[assets]]
+id        = "coin_front"
+prompt    = "gold coin icon, thick rim, seen from directly the front"
+reference = "refs/coin.png"      # relative to the pack file; falls back to the style bible
+```
+
 ### Configuration
 
 `make` reads its endpoints from `.env` in the project root (copy `.env.example`). A real
@@ -88,6 +156,7 @@ Unlike pack files — which hold the *name* of an env var and are meant to be sh
 | goal | command |
 |---|---|
 | One object, quick iteration | `make` |
+| Multiple objects from a screenshot | `extract` |
 | A consistent set of 30 assets | `build` with a pack |
 | Derive a pack's style from a reference | `analyze` |
 
@@ -224,7 +293,7 @@ is not implemented.
 ## Tests
 
 ```bash
-python3 test_post.py && python3 test_config.py && python3 test_client.py && python3 test_build.py && python3 test_packwriter.py && python3 test_vision.py && python3 test_env.py && python3 test_make.py
+python3 test_post.py && python3 test_config.py && python3 test_client.py && python3 test_build.py && python3 test_packwriter.py && python3 test_vision.py && python3 test_env.py && python3 test_make.py && python3 test_extract.py
 ```
 
 No network, no rembg model download, runs in about a second.
