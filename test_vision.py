@@ -86,6 +86,17 @@ def test_extract_json_embedded_in_prose():
     assert vision.extract_schema(text) == SCHEMA
 
 
+def test_extract_tolerates_a_trailing_comma():
+    """Observed live: a model returned a correct schema with a comma before }."""
+    text = "```json\n" + json.dumps(SCHEMA).replace('"}', '",}') + "\n```"
+    assert vision.extract_schema(text) == SCHEMA
+
+
+def test_extract_tolerates_a_trailing_comma_without_fences():
+    bad = json.dumps(SCHEMA)[:-1] + ",}"
+    assert vision.extract_schema(bad) == SCHEMA
+
+
 def test_extract_raises_on_unparseable_text():
     try:
         vision.extract_schema("I cannot analyze this image.")
@@ -156,6 +167,7 @@ def test_analyze_posts_to_the_vision_endpoint_with_the_image():
     body = rec.calls[0]["json"]
     assert body["model"] == "vision/model"
     assert "modalities" not in body           # text output, not image
+    assert body["stream"] is False           # proxies default to SSE otherwise
     content = body["messages"][0]["content"]
     assert content[0]["type"] == "text"
     assert vision.ANALYSIS_PROMPT in content[0]["text"]

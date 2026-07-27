@@ -42,6 +42,8 @@ Rules:
 - Every field must be filled in. Reply with JSON only, no commentary."""
 
 _FENCED = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
+# A comma right before a closing brace/bracket: invalid JSON, common model slip.
+_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 
 
 class AnalysisError(Exception):
@@ -52,6 +54,24 @@ class AnalysisError(Exception):
         self.raw = raw
 
 
+def _loads(candidate: str) -> dict | None:
+    """Parse JSON, retrying once with trailing commas stripped.
+
+    A trailing comma before } or ] is invalid JSON but a very common model
+    slip — observed live from a Claude model that otherwise returned a
+    perfectly-formed schema. Rejecting the whole analysis over one comma
+    would throw away a reply the user already paid for.
+    """
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        pass
+    try:
+        return json.loads(_TRAILING_COMMA.sub(r"\1", candidate))
+    except json.JSONDecodeError:
+        return None
+
+
 def extract_schema(text: str) -> dict:
     """Pull the JSON object out of a model reply.
 
@@ -60,18 +80,16 @@ def extract_schema(text: str) -> dict:
     """
     match = _FENCED.search(text)
     if match:
-        try:
-            return json.loads(match.group(1))
-        except json.JSONDecodeError:
-            pass
+        parsed = _loads(match.group(1))
+        if parsed is not None:
+            return parsed
 
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end > start:
-        try:
-            return json.loads(text[start : end + 1])
-        except json.JSONDecodeError:
-            pass
+        parsed = _loads(text[start : end + 1])
+        if parsed is not None:
+            return parsed
 
     raise AnalysisError("no JSON object found in the reply", raw=text)
 
@@ -130,6 +148,10 @@ def analyze(pack, image_bytes: bytes, retries: int = 3, sleeper=None) -> tuple[d
             {"type": "text", "text": ANALYSIS_PROMPT},
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
         ]}],
+        # Sent explicitly because omitting it is not the same as false on every
+        # proxy: a local omniroute/litellm returns an SSE stream by default,
+        # which post_with_retry then reports as "200 response was not JSON".
+        "stream": False,
     }
     headers = {"Content-Type": "application/json"}
     key = pack.vision_api_key()
