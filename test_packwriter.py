@@ -181,6 +181,41 @@ def test_no_op_call_is_rejected():
         pass
 
 
+def test_pack_write_failure_restores_file():
+    """If path.write_text fails, the original file must be restored."""
+    import packwriter
+    p = _pack_file()
+    original = p.read_text()
+    broken_write = Path.write_text
+    write_count = [0]
+
+    def sabotage_write(self, text, *args, **kwargs):
+        if self == p and text != original:
+            write_count[0] += 1
+            if write_count[0] == 1:  # First write (the modified text) fails
+                raise OSError("simulated write failure")
+        return broken_write(self, text, *args, **kwargs)
+
+    Path.write_text = sabotage_write
+    try:
+        update_pack(p, prefix="whatever")
+        raise AssertionError("expected PackWriteError")
+    except PackWriteError as exc:
+        assert "did not verify" in str(exc)
+    finally:
+        Path.write_text = broken_write
+    assert p.read_text() == original
+
+
+def test_prefix_with_bracket_line_works():
+    """A prefix containing a line starting with [ should not confuse section parsing."""
+    p = _pack_file()
+    tricky_prefix = "line one\n[this looks like a section but is not]\nline three"
+    update_pack(p, prefix=tricky_prefix)
+    d = _load(p)
+    assert d["style"]["prefix"].strip() == tricky_prefix
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

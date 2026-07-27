@@ -19,7 +19,8 @@ class PackWriteError(Exception):
 
 
 # A section header at the start of a line: [style], [[assets]], ...
-_SECTION = re.compile(r"^\[", re.M)
+# Must have matching brackets to avoid matching [ inside multi-line string values.
+_SECTION = re.compile(r"^\[+[A-Za-z0-9_.\-\"' ]+\]+[ \t]*$", re.M)
 # prefix = "..." or prefix = """...""" (multi-line), captured as one value.
 _PREFIX = re.compile(
     r'^([ \t]*prefix[ \t]*=[ \t]*)("""(?:.|\n)*?"""|"(?:[^"\\]|\\.)*")',
@@ -131,10 +132,14 @@ def update_pack(
         text = _append_asset(text, new_asset[0], new_asset[1])
 
     backup = path.with_suffix(path.suffix + ".bak")
-    backup.write_text(original)
-    path.write_text(text)
 
     try:
+        backup.write_text(original)
+    except OSError as exc:
+        raise PackWriteError(f"cannot write backup {backup}: {exc}")
+
+    try:
+        path.write_text(text)
         written = _parse(path)
         if prefix is not None and written.get("style", {}).get("prefix", "").strip() != prefix.strip():
             raise ValueError("prefix did not round-trip")
