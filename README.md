@@ -95,6 +95,9 @@ camera, lighting, palette, linework, realism — plus what the image depicts.
 The style fields become the pack's `[style] prefix`; the image is copied to
 `out/<pack>/style_bible.png`; with `--add-asset <id>` the detected subject is
 appended as a new asset. `--dry-run` prints everything and writes nothing.
+`analyze` also accepts the same endpoint override flags as the other
+subcommands — `--base-url`, `--model`, `--transport`, `--vision-base-url`,
+`--vision-model`, `--out-root`.
 
 The subject is deliberately kept out of the style prefix: the prefix applies to
 every asset in the pack, and a subject folded into it makes them all drift
@@ -112,9 +115,17 @@ key_env  = "OMNIROUTE_API_KEY"
 model    = "anthropic/claude-sonnet-5"
 ```
 
-Omit the section entirely to reuse `[api]`. Each field falls back on its own, so
-you can override just the model. Precedence: `--vision-base-url` /
-`--vision-model` > `[vision]` > `[api]`.
+Omit the section to reuse `[api]`'s endpoint and key. `base_url` and `key_env`
+each fall back on their own, so you can override just one.
+
+**`model` is the exception: it has no fallback.** `[api]` has no model, and
+`[pack] model` is deliberately not inherited — that is the image-generation
+model, which is the wrong kind of model to describe a picture. Set `[vision]
+model` or pass `--vision-model`; without one, `analyze` stops with a clear
+error and the other commands are unaffected.
+
+Precedence: `--vision-base-url` > `[vision] base_url` > `[api] base_url`, and
+`--vision-model` > `[vision] model` (no further fallback).
 
 ### Writing to the pack
 
