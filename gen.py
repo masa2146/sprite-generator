@@ -204,13 +204,14 @@ def cmd_build(args):
     if _missing_key(pack):
         return 1
 
-    if not pack.style_bible.exists():
+    needs_bible = any(a.reference is None for a in targets)
+    if needs_bible and not pack.style_bible.exists():
         print(f"error: {pack.style_bible} not found — run `init` then `pick` first",
               file=sys.stderr)
         return 1
 
     pack.out_dir.mkdir(parents=True, exist_ok=True)
-    reference = pack.style_bible.read_bytes()
+    reference = pack.style_bible.read_bytes() if needs_bible else None
 
     records = []
     spent = 0.0
