@@ -84,9 +84,10 @@ python3 gen.py extract -i screen.png --pack packs/bunny.toml
 ```
 
 One vision call returns the shared style plus an object list with bounding boxes. Each box
-is validated, cropped to `refs/`, and written into a pack where **every view is its own
-asset pointing at its own crop**. A labelled contact sheet opens so you can check the crops
-against what they claim to be.
+is validated and cropped to `refs/<object>.png`. Every view becomes its own asset —
+`<object>-front`, `<object>-side`, etc. — and they all reference that same crop; the view
+phrase in each prompt is what asks for the different angle. A labelled contact sheet opens
+so you can check the crops against what they claim to be.
 
 **`extract` generates nothing.** It writes a pack; `build` does the generating:
 
@@ -142,7 +143,7 @@ prompt    = "gold coin icon, thick rim, seen from directly the front"
 reference = "refs/coin.png"      # relative to the pack file; falls back to the style bible
 ```
 
-### Configuration
+## Configuration
 
 `make` reads its endpoints from `.env` in the project root (copy `.env.example`). A real
 environment variable always wins over the file, so `export SPRITEGEN_MODEL=...` still
@@ -151,7 +152,7 @@ overrides it for one run, and a CLI flag overrides both.
 Unlike pack files — which hold the *name* of an env var and are meant to be shared —
 `.env` holds real key values and is gitignored.
 
-### When to use which
+## When to use which
 
 | goal | command |
 |---|---|
