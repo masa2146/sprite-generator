@@ -161,11 +161,20 @@ refs/
 
 Pack içeriği:
 
-**`[api]` yazılmaz, `[pack] model` yazılır.** Bu ayrım bilinçli: endpoint ve anahtar
-*ortama* aittir ve `build` onları zaten `.env`'den okur; model ise bir *içerik* kararıdır —
-pack'i paylaşan kişi hangi modelle üretildiğini bilmeli ve aynısını alabilmelidir.
+**`[api] base_url`/`transport` yazılmaz, `key_env` ve `[pack] model` yazılır.** Endpoint
+*ortama* aittir ve `build` onu zaten `.env`'den okur. Ama anahtarın hangi ortam
+değişkeninde tutulduğu (`key_env`) bir *içerik* kararıdır: `cmd_extract` pack'i
+`env_pack` üzerinden kurar, o yüzden hangi değişkenin dolu olduğunu zaten biliyor —
+bunu yazmazsak `load_pack`'in `key_env` varsayılanı (`OPENROUTER_API_KEY`) devreye
+girer ve `extract`'ın kullandığı değişkenle (örn. `SPRITEGEN_API_KEY`) uyuşmayabilir.
+`key_env` boş olabilir ("bu endpoint anahtar istemiyor") ve bu durumda da
+`key_env = ""` olarak yazılır. Model ise ayrıca bir *içerik* kararıdır — pack'i
+paylaşan kişi hangi modelle üretildiğini bilmeli ve aynısını alabilmelidir.
 
 ```toml
+[api]
+key_env = "SPRITEGEN_API_KEY"
+
 [pack]
 model = "black-forest-labs/flux.2-max"
 

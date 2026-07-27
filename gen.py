@@ -725,7 +725,7 @@ def cmd_extract(args):
         # cost the user the crops and the pack they already paid for.
         print(f"warning: contact sheet not written: {exc}", file=sys.stderr)
 
-    text = extract.pack_text(pack.model, schema["style"], kept, refs_dir, pack_path)
+    text = extract.pack_text(pack.model, pack.key_env, schema["style"], kept, refs_dir, pack_path)
     try:
         pack_path.parent.mkdir(parents=True, exist_ok=True)
         pack_path.write_text(text, encoding="utf-8")
