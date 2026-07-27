@@ -1,4 +1,4 @@
-"""Build orchestration tests. No network, no rembg. Run: python test_build.py"""
+"""Build orchestration tests. No network, no rembg. Run: python3 test_build.py"""
 import base64
 import json
 import os
@@ -726,6 +726,147 @@ def test_real_generate_through_build_on_images_transport_posts_aspect_ratio():
     with Image.open(out_png) as img:
         assert img.mode == "RGBA"
         assert img.getpixel((0, 0))[3] == 0  # transparent corner survives trim/pad
+
+
+# --- analyze ----------------------------------------------------------------
+
+ANALYSIS_SCHEMA = {
+    "style": {
+        "render": "soft 3D render, glossy plastic",
+        "camera": "3/4 front view",
+        "lighting": "top-left key light",
+        "palette": "#FF6B4A #4ECDC4",
+        "linework": "no outline, rounded geometry",
+        "realism": "stylized cartoon",
+    },
+    "subject": "gold coin icon, front view, thick rim",
+}
+
+
+class _VisionStub:
+    """Replaces vision.analyze for the duration of a test."""
+
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.images = []
+
+    def __enter__(self):
+        self._orig = gen.vision.analyze
+
+        def fake(pack, image_bytes, **kw):
+            self.images.append(image_bytes)
+            if self.error:
+                raise self.error
+            return self.result, json.dumps(self.result)
+
+        gen.vision.analyze = fake
+        return self
+
+    def __exit__(self, *exc):
+        gen.vision.analyze = self._orig
+
+
+def _analyze_pack(tmp):
+    """A spec on disk plus a reference image; returns (spec_path, image_path)."""
+    spec = _spec_file(SPEC)
+    img = Path(tmp) / "ref.png"
+    img.write_bytes(_png((7, 8, 9)))
+    return spec, img
+
+
+def test_analyze_dry_run_writes_nothing():
+    tmp = tempfile.mkdtemp()
+    spec, img = _analyze_pack(tmp)
+    before = spec.read_text()
+    with _VisionStub(result=ANALYSIS_SCHEMA):
+        code = gen.main(["analyze", str(img), "--pack", str(spec),
+                         "--out-root", tmp, "--dry-run"])
+    assert code == 0
+    assert spec.read_text() == before
+    assert not (Path(tmp) / "hc_v1" / "style_bible.png").exists()
+
+
+def test_analyze_writes_the_style_prefix():
+    tmp = tempfile.mkdtemp()
+    spec, img = _analyze_pack(tmp)
+    with _VisionStub(result=ANALYSIS_SCHEMA):
+        code = gen.main(["analyze", str(img), "--pack", str(spec), "--out-root", tmp])
+    assert code == 0
+    import tomllib
+    with open(spec, "rb") as fh:
+        written = tomllib.load(fh)["style"]["prefix"]
+    assert "soft 3D render, glossy plastic" in written
+    assert ANALYSIS_SCHEMA["subject"] not in written   # subject must not leak in
+
+
+def test_analyze_copies_the_image_as_the_style_bible():
+    tmp = tempfile.mkdtemp()
+    spec, img = _analyze_pack(tmp)
+    with _VisionStub(result=ANALYSIS_SCHEMA):
+        gen.main(["analyze", str(img), "--pack", str(spec), "--out-root", tmp])
+    bible = Path(tmp) / "hc_v1" / "style_bible.png"
+    assert bible.read_bytes() == img.read_bytes()
+
+
+def test_analyze_add_asset_appends_the_subject():
+    tmp = tempfile.mkdtemp()
+    spec, img = _analyze_pack(tmp)
+    with _VisionStub(result=ANALYSIS_SCHEMA):
+        code = gen.main(["analyze", str(img), "--pack", str(spec),
+                         "--out-root", tmp, "--add-asset", "coin_ref"])
+    assert code == 0
+    import tomllib
+    with open(spec, "rb") as fh:
+        assets = tomllib.load(fh)["assets"]
+    assert assets[-1]["id"] == "coin_ref"
+    assert assets[-1]["prompt"].startswith(ANALYSIS_SCHEMA["subject"])
+
+
+def test_analyze_without_add_asset_leaves_assets_alone():
+    tmp = tempfile.mkdtemp()
+    spec, img = _analyze_pack(tmp)
+    import tomllib
+    with open(spec, "rb") as fh:
+        before = len(tomllib.load(fh)["assets"])
+    with _VisionStub(result=ANALYSIS_SCHEMA):
+        gen.main(["analyze", str(img), "--pack", str(spec), "--out-root", tmp])
+    with open(spec, "rb") as fh:
+        assert len(tomllib.load(fh)["assets"]) == before
+
+
+def test_analyze_duplicate_asset_id_fails_without_writing():
+    tmp = tempfile.mkdtemp()
+    spec, img = _analyze_pack(tmp)
+    before = spec.read_text()
+    with _VisionStub(result=ANALYSIS_SCHEMA):
+        code = gen.main(["analyze", str(img), "--pack", str(spec),
+                         "--out-root", tmp, "--add-asset", "btn_play"])
+    assert code == 1
+    assert spec.read_text() == before
+
+
+def test_analyze_missing_image_exits_cleanly():
+    tmp = tempfile.mkdtemp()
+    spec, _ = _analyze_pack(tmp)
+    with _VisionStub(result=ANALYSIS_SCHEMA):
+        code = gen.main(["analyze", str(Path(tmp) / "nope.png"),
+                         "--pack", str(spec), "--out-root", tmp])
+    assert code == 1
+
+
+def test_analyze_failure_writes_the_raw_reply_and_leaves_the_pack_alone():
+    tmp = tempfile.mkdtemp()
+    spec, img = _analyze_pack(tmp)
+    before = spec.read_text()
+    err = gen.vision.AnalysisError("no JSON object found in the reply",
+                                   raw="I cannot analyze this image.")
+    with _VisionStub(error=err):
+        code = gen.main(["analyze", str(img), "--pack", str(spec), "--out-root", tmp])
+    assert code == 1
+    assert spec.read_text() == before
+    dump = img.with_suffix(".png.analysis-error.txt")
+    assert "I cannot analyze this image." in dump.read_text()
 
 
 if __name__ == "__main__":

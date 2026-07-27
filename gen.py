@@ -20,7 +20,9 @@ from PIL import Image
 
 import config
 import orclient
+import packwriter
 import post
+import vision
 
 EST_COST = 0.04          # per-image estimate for --dry-run only
 DEFAULT_MAX_COST = 5.00
@@ -349,13 +351,92 @@ def cmd_pick(args):
     return 0
 
 
-def _add_common(sub):
-    sub.add_argument("spec")
+def cmd_analyze(args):
+    try:
+        pack = config.load_pack(
+            args.pack, base_url=args.base_url, model=args.model,
+            transport=args.transport, vision_base_url=args.vision_base_url,
+            vision_model=args.vision_model, out_root=Path(args.out_root),
+        )
+    except config.SpecError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    image_path = Path(args.image)
+    try:
+        image_bytes = image_path.read_bytes()
+    except OSError as exc:
+        print(f"error: cannot read {image_path}: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        schema, _raw = vision.analyze(pack, image_bytes)
+    except vision.AnalysisError as exc:
+        # The reply is the only evidence of what went wrong; keep it on disk
+        # rather than making the user re-run and re-pay to see it again.
+        if exc.raw:
+            dump = image_path.with_suffix(image_path.suffix + ".analysis-error.txt")
+            try:
+                dump.write_text(exc.raw)
+                print(f"error: {exc} (raw reply written to {dump})", file=sys.stderr)
+            except OSError:
+                print(f"error: {exc}", file=sys.stderr)
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except orclient.ApiError as exc:
+        print(f"error: vision request failed: {exc}", file=sys.stderr)
+        return 1
+
+    prefix = vision.style_prefix(schema)
+    repro = vision.reproduction_prompt(schema)
+
+    print("style:")
+    for field in vision.STYLE_FIELDS:
+        print(f"  {field:<9} {schema['style'][field]}")
+    print(f"\nsubject: {schema['subject']}")
+    print(f"\n[style] prefix:\n{prefix}")
+    print(f"\nreproduction prompt:\n{repro}")
+
+    if args.dry_run:
+        print("\ndry run: nothing written")
+        return 0
+
+    try:
+        packwriter.update_pack(
+            args.pack,
+            prefix=prefix,
+            new_asset=(args.add_asset, repro) if args.add_asset else None,
+        )
+    except packwriter.PackWriteError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"\nwrote [style] prefix -> {args.pack}")
+    if args.add_asset:
+        print(f"wrote [[assets]] {args.add_asset} -> {args.pack}")
+
+    pack.out_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(image_path, pack.style_bible)
+    print(f"wrote style bible     -> {pack.style_bible}")
+    print(f"\nnow run:  python3 gen.py build {args.pack}")
+    return 0
+
+
+def _add_endpoint_flags(sub):
     sub.add_argument("--base-url", default=None, help="override [api] base_url")
     sub.add_argument("--model", default=None, help="override [pack] model")
     sub.add_argument("--transport", default=None, choices=config.VALID_TRANSPORTS,
-                      help="override [api] transport")
+                     help="override [api] transport")
+    sub.add_argument("--vision-base-url", default=None,
+                     help="override [vision] base_url")
+    sub.add_argument("--vision-model", default=None, help="override [vision] model")
     sub.add_argument("--out-root", default="out", help="root output directory")
+
+
+def _add_common(sub):
+    sub.add_argument("spec")
+    _add_endpoint_flags(sub)
 
 
 def main(argv=None):
@@ -383,6 +464,17 @@ def main(argv=None):
     _add_common(pick)
     pick.add_argument("index", type=int, help="candidate number shown by init")
     pick.set_defaults(func=cmd_pick)
+
+    analyze = subs.add_parser(
+        "analyze", help="analyse a reference image into the pack's style prefix")
+    analyze.add_argument("image", help="reference image to analyse")
+    analyze.add_argument("--pack", required=True, help="spec file to update")
+    _add_endpoint_flags(analyze)
+    analyze.add_argument("--add-asset", default=None, metavar="ID",
+                         help="also append the detected subject as a new asset")
+    analyze.add_argument("--dry-run", action="store_true",
+                         help="print the analysis, write nothing")
+    analyze.set_defaults(func=cmd_analyze)
 
     args = parser.parse_args(argv)
     return args.func(args)
