@@ -6,7 +6,7 @@ Commands:
     build <spec>    generate every asset in the spec
     analyze <image> derive the style prefix (and style bible) from a reference image
     make            pack-less one-shot: an image, a text, or both -> one sprite
-    extract <image> find every sprite in an image and write a buildable pack
+    extract         find every sprite in an image and write a buildable pack
 """
 
 from __future__ import annotations
@@ -668,7 +668,7 @@ def cmd_extract(args):
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    if args.image and pack.vision_key_env and pack.vision_api_key() is None:
+    if pack.vision_key_env and pack.vision_api_key() is None:
         print(f"error: ${pack.vision_key_env} is not set", file=sys.stderr)
         return 1
 
