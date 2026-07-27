@@ -189,6 +189,49 @@ def response_cost(resp: dict) -> float | None:
     return float(cost) if isinstance(cost, (int, float)) else None
 
 
+def post_with_retry(
+    url: str,
+    payload: dict,
+    headers: dict,
+    retries: int = 3,
+    sleeper=time.sleep,
+) -> dict:
+    """POST and return the parsed 200 body, retrying transient failures.
+
+    429, 5xx and network-level errors retry with 2s then 4s backoff and no
+    sleep after the final attempt. Other 4xx (bad prompt, unknown model, bad
+    key) raise immediately — retrying them is pointless. Shared by image
+    generation and vision analysis so there is only one retry policy.
+    """
+    last_error: ApiError | None = None
+    for attempt in range(retries):
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=_TIMEOUT)
+        except requests.exceptions.RequestException as exc:
+            # Timeout, connection reset, DNS failure, ... With a 180s timeout on
+            # image generation, a timeout is the single most likely transient
+            # failure — treat it like a 5xx and retry with the same backoff.
+            last_error = ApiError(f"{type(exc).__name__}: {exc}")
+            if attempt < retries - 1:
+                sleeper(2 ** (attempt + 1))
+            continue
+
+        if resp.status_code == 200:
+            return resp.json()
+
+        if resp.status_code == 429 or resp.status_code >= 500:
+            last_error = ApiError(f"HTTP {resp.status_code}", resp.status_code)
+            if attempt < retries - 1:
+                sleeper(2 ** (attempt + 1))
+            continue
+
+        raise ApiError(f"HTTP {resp.status_code}: {resp.text[:200]}", resp.status_code)
+
+    raise last_error if last_error is not None else ApiError(
+        f"post_with_retry called with retries={retries}: no attempt was made"
+    )
+
+
 def generate(
     pack,
     prompt: str,
@@ -221,32 +264,5 @@ def generate(
         )
         parse = parse_image
 
-    last_error: ApiError | None = None
-    for attempt in range(retries):
-        try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=_TIMEOUT)
-        except requests.exceptions.RequestException as exc:
-            # Timeout, connection reset, DNS failure, ... With a 180s timeout on
-            # image generation, a timeout is the single most likely transient
-            # failure — treat it like a 5xx and retry with the same backoff.
-            last_error = ApiError(f"{type(exc).__name__}: {exc}")
-            if attempt < retries - 1:
-                sleeper(2 ** (attempt + 1))
-            continue
-
-        if resp.status_code == 200:
-            body = resp.json()
-            return parse(body), response_cost(body), body
-
-        if resp.status_code == 429 or resp.status_code >= 500:
-            last_error = ApiError(f"HTTP {resp.status_code}", resp.status_code)
-            if attempt < retries - 1:
-                sleeper(2 ** (attempt + 1))
-            continue
-
-        # Other 4xx: bad prompt, unknown model, bad key. Retrying is pointless.
-        raise ApiError(f"HTTP {resp.status_code}: {resp.text[:200]}", resp.status_code)
-
-    raise last_error if last_error is not None else ApiError(
-        f"generate() called with retries={retries}: no attempt was made"
-    )
+    body = post_with_retry(url, payload, headers, retries=retries, sleeper=sleeper)
+    return parse(body), response_cost(body), body

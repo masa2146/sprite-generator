@@ -489,6 +489,20 @@ def test_generate_does_not_retry_4xx_other_than_429():
     assert len(rec.calls) == 1
 
 
+def test_post_with_retry_returns_the_parsed_body_and_retries_5xx():
+    rec = _Recorder([_Resp(500), _Resp(200, {"ok": True})])
+    slept = []
+    original = orclient.requests.post
+    orclient.requests.post = rec
+    try:
+        body = orclient.post_with_retry("http://svc/v1/x", {"a": 1}, {}, sleeper=slept.append)
+    finally:
+        orclient.requests.post = original
+    assert body == {"ok": True}
+    assert len(rec.calls) == 2
+    assert slept == [2]
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
