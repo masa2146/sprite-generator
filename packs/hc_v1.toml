@@ -13,6 +13,13 @@ transport = "images"
 #   key_env   = ""              # empty means no Authorization header at all
 #   transport = "chat"
 
+# Optional: a separate endpoint for `analyze` (image understanding). Omit the
+# whole section to reuse [api]. Each field falls back individually.
+# [vision]
+# base_url = "http://localhost:4000/v1"   # omniroute / litellm
+# key_env  = "OMNIROUTE_API_KEY"
+# model    = "anthropic/claude-sonnet-5"
+
 [pack]
 model = "bytedance-seed/seedream-4.5"   # $0.04/image; images-only output_modalities,
                                           # only reachable via the /images endpoint

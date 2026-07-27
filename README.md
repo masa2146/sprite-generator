@@ -15,6 +15,14 @@ removal weights to `~/.u2net/` (a few hundred MB, once).
 
 ## Use
 
+If you already have a reference image, skip `init`/`pick` entirely — analyse it
+instead. That writes the style prefix *and* locks the image as the style bible,
+saving the four style-plate generations:
+
+```bash
+python3 gen.py analyze ref.png --pack packs/hc_v1.toml
+```
+
 ```bash
 # 1. Generate four candidate style plates and open them as a contact sheet
 python3 gen.py init packs/hc_v1.toml
@@ -76,6 +84,55 @@ The `usage.cost` field is an OpenRouter extension. Against an endpoint that omit
 it, `--max-cost` cannot be enforced; the tool warns once and continues rather
 than pretending the ceiling is active.
 
+## Analysing a reference image
+
+```bash
+python3 gen.py analyze <image> --pack <spec.toml> [--add-asset <id>] [--dry-run]
+```
+
+Sends the image to a vision model and extracts six style fields — render,
+camera, lighting, palette, linework, realism — plus what the image depicts.
+The style fields become the pack's `[style] prefix`; the image is copied to
+`out/<pack>/style_bible.png`; with `--add-asset <id>` the detected subject is
+appended as a new asset. `--dry-run` prints everything and writes nothing.
+
+The subject is deliberately kept out of the style prefix: the prefix applies to
+every asset in the pack, and a subject folded into it makes them all drift
+toward that one object.
+
+### The `[vision]` endpoint
+
+Analysis can use a different endpoint and model than image generation — a plain
+OpenAI-schema `/chat/completions` that accepts an image and replies with text:
+
+```toml
+[vision]
+base_url = "http://localhost:4000/v1"   # omniroute / litellm
+key_env  = "OMNIROUTE_API_KEY"
+model    = "anthropic/claude-sonnet-5"
+```
+
+Omit the section entirely to reuse `[api]`. Each field falls back on its own, so
+you can override just the model. Precedence: `--vision-base-url` /
+`--vision-model` > `[vision]` > `[api]`.
+
+### Writing to the pack
+
+`analyze` edits the pack in place with targeted line replacement rather than
+re-serializing it, so every comment survives. Each write is guarded: the file is
+backed up to `<pack>.toml.bak`, written, re-parsed and verified — and restored
+from the original if verification fails.
+
+### Doing the same thing inside Claude Code
+
+`.claude/skills/image-style/SKILL.md` performs the same analysis using Claude's
+own vision, with no endpoint, key or cost. It only reads and reports — writing
+into a pack stays `analyze`'s job. To use it from other projects:
+
+```bash
+ln -s "$PWD/.claude/skills/image-style" ~/.claude/skills/image-style
+```
+
 ## Why the grey backdrop
 
 Hosted image models do not reliably emit an alpha channel — asked for
@@ -107,7 +164,7 @@ is not implemented.
 ## Tests
 
 ```bash
-python3 test_post.py && python3 test_config.py && python3 test_client.py && python3 test_build.py
+python3 test_post.py && python3 test_config.py && python3 test_client.py && python3 test_build.py && python3 test_packwriter.py && python3 test_vision.py
 ```
 
 No network, no rembg model download, runs in about a second.
