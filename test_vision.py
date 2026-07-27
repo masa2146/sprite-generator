@@ -301,6 +301,111 @@ def test_analyze_with_user_text_appends_the_override_clause():
     assert "user" in sent.lower()
 
 
+# --- view pool --------------------------------------------------------------
+
+def test_view_pool_contents():
+    assert set(vision.VIEW_POOL) == {
+        "front", "three_quarter", "side", "back", "top_down"}
+    assert vision.DEFAULT_VIEW == "front"
+    for phrase in vision.VIEW_POOL.values():
+        assert phrase and not phrase.endswith(".")
+
+
+def test_normalise_views_drops_names_outside_the_pool():
+    assert vision.normalise_views(["side", "isometric", "back"], True) == ["side", "back"]
+
+
+def test_normalise_views_falls_back_to_front_when_nothing_survives():
+    assert vision.normalise_views(["isometric", "worm_eye"], True) == ["front"]
+
+
+def test_normalise_views_dedupes_and_uses_pool_order():
+    assert vision.normalise_views(["back", "front", "back"], True) == ["front", "back"]
+
+
+def test_a_static_object_gets_exactly_one_view():
+    assert vision.normalise_views(["front", "side", "back"], False) == ["front"]
+
+
+def test_normalise_views_handles_a_non_list():
+    assert vision.normalise_views(None, True) == ["front"]
+    assert vision.normalise_views("side", True) == ["front"]
+
+
+# --- object analysis --------------------------------------------------------
+
+OBJECTS_REPLY = {
+    "style": {
+        "render": "soft 3D render, glossy plastic",
+        "camera": "top-down flat view",
+        "lighting": "soft even ambient",
+        "palette": "#2E2A4D #6C4CD6",
+        "linework": "no hard outlines",
+        "realism": "stylized cartoon",
+    },
+    "objects": [
+        {
+            "id": "bunny_white", "bbox": [45, 1000, 165, 1125],
+            "animated": True, "views": ["front", "side"],
+            "subject": "a plump white rabbit token",
+            "form": "a round ball body with two upright ears",
+            "detail": "tiny dot eyes, pink nose",
+        },
+        {
+            "id": "launcher", "bbox": [0, 730, 115, 940],
+            "animated": False, "views": ["front"],
+            "subject": "a launcher chute",
+            "form": "a ribbed panel above a rounded box with a vertical slot",
+            "detail": "thick bevelled rim",
+        },
+    ],
+}
+
+
+def test_analyze_objects_returns_style_and_objects():
+    (schema, _), rec = _run_objects([_Resp(200, _body(json.dumps(OBJECTS_REPLY)))])
+    assert [o["id"] for o in schema["objects"]] == ["bunny_white", "launcher"]
+    assert schema["style"]["render"].startswith("soft 3D")
+
+
+def test_analyze_objects_sends_the_object_prompt_and_the_image():
+    _, rec = _run_objects([_Resp(200, _body(json.dumps(OBJECTS_REPLY)))])
+    body = rec.calls[0]["json"]
+    assert body["stream"] is False
+    content = body["messages"][0]["content"]
+    assert vision.OBJECT_ANALYSIS_PROMPT in content[0]["text"]
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_analyze_objects_rejects_a_reply_with_no_objects():
+    reply = {"style": OBJECTS_REPLY["style"], "objects": []}
+    try:
+        _run_objects([_Resp(200, _body(json.dumps(reply)))])
+        raise AssertionError("expected AnalysisError")
+    except vision.AnalysisError as exc:
+        assert "object" in str(exc).lower()
+
+
+def test_analyze_objects_rejects_a_reply_with_no_style():
+    reply = {"objects": OBJECTS_REPLY["objects"]}
+    try:
+        _run_objects([_Resp(200, _body(json.dumps(reply)))])
+        raise AssertionError("expected AnalysisError")
+    except vision.AnalysisError as exc:
+        assert "style" in str(exc).lower()
+
+
+def _run_objects(responses, pack=None):
+    import orclient
+    rec = _Recorder(responses)
+    original = orclient.requests.post
+    orclient.requests.post = rec
+    try:
+        return vision.analyze_objects(pack or _pack(), PNG, sleeper=lambda s: None), rec
+    finally:
+        orclient.requests.post = original
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

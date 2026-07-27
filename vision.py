@@ -180,6 +180,116 @@ def object_prompt(schema: dict) -> str:
     return ", ".join(parts)
 
 
+# Closed set of view variations. Closed rather than free-form so file names stay
+# predictable and the same command twice yields the same set.
+VIEW_POOL = {
+    "front": "seen from directly the front",
+    "three_quarter": "seen from a three-quarter front angle",
+    "side": "seen from directly the side, full profile",
+    "back": "seen from directly behind",
+    "top_down": "seen from directly above, top-down",
+}
+DEFAULT_VIEW = "front"
+
+OBJECT_ANALYSIS_PROMPT = """List every distinct sprite in this image and describe each one as JSON:
+
+{
+  "style": {
+    "render":   "render technique and material shared by the whole image",
+    "camera":   "camera angle and framing",
+    "lighting": "light direction, softness, shadows",
+    "palette":  "dominant colours as hex codes",
+    "linework": "outlines and geometry",
+    "realism":  "stylisation axis"
+  },
+  "objects": [
+    {
+      "id": "short_snake_case_name",
+      "bbox": [x1, y1, x2, y2],
+      "animated": true,
+      "views": ["front", "side"],
+      "subject": "what this object IS, briefly",
+      "form": "its construction: how many parts, arrangement, proportions",
+      "detail": "distinguishing smaller features"
+    }
+  ]
+}
+
+Rules:
+- "style" describes the whole image once; it must not name any object.
+- One entry per distinct sprite. Do not list the background or the whole screen.
+- "bbox" is in pixels, top-left origin, [left, top, right, bottom].
+- "animated" is true only for things that move in the game (characters, pickups).
+- "views" may only contain: front, three_quarter, side, back, top_down.
+  Use one view for anything not animated.
+- Reply with JSON only, no commentary."""
+
+
+def normalise_views(views, animated: bool) -> list[str]:
+    """Reduce a model's view list to known names, in pool order.
+
+    A static object gets exactly one view: generating four angles of a rail
+    segment spends money for nothing.
+    """
+    if not animated or not isinstance(views, list):
+        return [DEFAULT_VIEW]
+    wanted = {v for v in views if isinstance(v, str) and v in VIEW_POOL}
+    ordered = [v for v in VIEW_POOL if v in wanted]
+    return ordered or [DEFAULT_VIEW]
+
+
+def analyze_objects(pack, image_bytes: bytes, retries: int = 3,
+                    sleeper=None) -> tuple[dict, str]:
+    """Ask the vision model for every sprite in the image.
+
+    Returns ({"style": {...}, "objects": [...]}, raw_reply_text). Views are
+    normalised here so callers never see a name outside the pool.
+    """
+    if not pack.vision_model:
+        raise AnalysisError(
+            "no vision model: set [vision] model, pass --vision-model, "
+            "or set SPRITEGEN_VISION_MODEL"
+        )
+
+    mime = orclient._sniff_mime(image_bytes)
+    b64 = base64.b64encode(image_bytes).decode()
+    payload = {
+        "model": pack.vision_model,
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": OBJECT_ANALYSIS_PROMPT},
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+        ]}],
+        "stream": False,
+    }
+    headers = {"Content-Type": "application/json"}
+    key = pack.vision_api_key()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    url = pack.vision_base_url.rstrip("/") + "/chat/completions"
+    kwargs = {"retries": retries}
+    if sleeper is not None:
+        kwargs["sleeper"] = sleeper
+    body = orclient.post_with_retry(url, payload, headers, **kwargs)
+
+    message = ((body.get("choices") or [{}])[0] or {}).get("message") or {}
+    content = message.get("content")
+    text = content if isinstance(content, str) else json.dumps(content)
+
+    schema = extract_schema(text)
+    style = schema.get("style")
+    if not isinstance(style, dict) or not style:
+        raise AnalysisError("reply has no style block", raw=text)
+    objects = schema.get("objects")
+    if not isinstance(objects, list) or not objects:
+        raise AnalysisError("reply lists no objects", raw=text)
+
+    for obj in objects:
+        if isinstance(obj, dict):
+            obj["views"] = normalise_views(obj.get("views"), bool(obj.get("animated")))
+    return schema, text
+
+
 def analyze(pack, image_bytes: bytes, user_text: str | None = None,
             retries: int = 3, sleeper=None) -> tuple[dict, str]:
     """Send the image to the vision endpoint. Returns (schema, raw_reply_text)."""
