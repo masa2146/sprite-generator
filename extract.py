@@ -9,6 +9,7 @@ makes the cost a separate, explicit decision.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -22,6 +23,10 @@ DEFAULT_MAX_OBJECTS = 12
 
 _LABEL_H = 22              # strip under each cell for its caption
 _PAD = 8
+
+# The model's id becomes a filename (refs_dir / f"{id}.png") and, in gen.py, an
+# asset id used the same way — untrusted, so it must not contain "/" or "..".
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
 def reject_reason(bbox, img_w: int, img_h: int) -> str | None:
@@ -58,6 +63,7 @@ def crop_objects(image: Image.Image, objects, refs_dir) -> tuple[list[dict], lis
     refs_dir.mkdir(parents=True, exist_ok=True)
     kept: list[dict] = []
     rejected: list[tuple[str, str]] = []
+    seen: set[str] = set()
 
     for index, obj in enumerate(objects):
         if not isinstance(obj, dict):
@@ -67,6 +73,13 @@ def crop_objects(image: Image.Image, objects, refs_dir) -> tuple[list[dict], lis
         if not isinstance(obj_id, str) or not obj_id.strip():
             rejected.append((f"object[{index}]", "missing id"))
             continue
+        if not _ID_RE.fullmatch(obj_id):
+            rejected.append((obj_id, "unusable id"))
+            continue
+        if obj_id in seen:
+            rejected.append((obj_id, "duplicate id"))
+            continue
+        seen.add(obj_id)
 
         reason = reject_reason(obj.get("bbox"), image.width, image.height)
         if reason:
