@@ -522,6 +522,57 @@ def test_env_pack_ignores_a_dot_env_when_the_environment_is_explicit():
         _clear_env()
 
 
+# --- per-asset reference ----------------------------------------------------
+
+REF_SPEC = """
+[pack]
+model = "m/model"
+[style]
+prefix = "p"
+[[assets]]
+id = "with_ref"
+prompt = "q"
+reference = "refs/thing.png"
+[[assets]]
+id = "without_ref"
+prompt = "q2"
+"""
+
+
+def test_reference_resolves_relative_to_the_pack_file():
+    _clear_env()
+    spec = _write(REF_SPEC)
+    pack = load_pack(spec)
+    by_id = {a.id: a for a in pack.assets}
+    assert by_id["with_ref"].reference == (spec.parent / "refs" / "thing.png").resolve()
+
+
+def test_reference_is_none_when_absent():
+    _clear_env()
+    by_id = {a.id: a for a in load_pack(_write(REF_SPEC)).assets}
+    assert by_id["without_ref"].reference is None
+
+
+def test_an_absolute_reference_is_not_joined_to_the_pack_dir():
+    """Absolute means absolute — it must not be resolved relative to the pack.
+
+    Both branches call .resolve(), so the expected value is resolved too;
+    on macOS /tmp is a symlink to /private/tmp and the literal would not match.
+    """
+    _clear_env()
+    spec = _write(REF_SPEC.replace('"refs/thing.png"', '"/tmp/abs/thing.png"'))
+    ref = {a.id: a for a in load_pack(spec).assets}["with_ref"].reference
+    assert ref == Path("/tmp/abs/thing.png").resolve()
+    assert spec.parent not in ref.parents      # the real invariant: no join happened
+
+
+def test_reference_does_not_have_to_exist_at_load_time():
+    """Loading must not require the file — build reports a missing one per asset."""
+    _clear_env()
+    pack = load_pack(_write(REF_SPEC))
+    assert pack.assets[0].reference is not None      # no exception, no existence check
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

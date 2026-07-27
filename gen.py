@@ -65,6 +65,13 @@ def _record(pack, asset, status, cost=None, file=None, error=None):
 def build_one(pack, asset, reference_png):
     """Generate and post-process one asset. Returns a manifest record, never raises."""
     out_dir = pack.out_dir
+    if asset.reference is not None:
+        try:
+            reference_png = asset.reference.read_bytes()
+        except OSError as exc:
+            # Fail this asset only — the pack's other assets are unaffected.
+            return _record(pack, asset, "failed",
+                           error=f"cannot read reference {asset.reference}: {exc}")
     try:
         png, cost, _raw = orclient.generate(
             pack,

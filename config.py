@@ -42,6 +42,7 @@ class Asset:
     prompt: str
     aspect_ratio: str = "1:1"
     cutout: bool = True  # sprite-with-subject vs. whole-image (background/tile)
+    reference: Path | None = None   # per-asset reference image, resolved absolute
 
 
 @dataclass
@@ -201,12 +202,24 @@ def load_pack(
         if row["id"] in seen:
             raise SpecError(f"duplicate asset id: {row['id']}")
         seen.add(row["id"])
+        raw_ref = row.get("reference")
+        resolved_ref = None
+        if raw_ref is not None:
+            if not isinstance(raw_ref, str) or not raw_ref.strip():
+                raise SpecError(f"assets[{i}]: 'reference' must be a non-empty string")
+            ref_path = Path(raw_ref)
+            # Relative to the pack file, not the cwd: a pack carries its refs with it.
+            resolved_ref = (
+                ref_path if ref_path.is_absolute()
+                else (spec_path.parent / ref_path)
+            ).resolve()
         assets.append(
             Asset(
                 id=row["id"],
                 prompt=row["prompt"],
                 aspect_ratio=row.get("aspect_ratio", default_ratio),
                 cutout=row.get("cutout", True),
+                reference=resolved_ref,
             )
         )
     if not assets:

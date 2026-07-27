@@ -947,6 +947,47 @@ def test_analyze_failure_writes_the_raw_reply_and_leaves_the_pack_alone():
     assert "I cannot analyze this image." in dump.read_text()
 
 
+# --- per-asset reference ----------------------------------------------------
+
+def _spec_with_btn_play_reference(tmp, ref_value):
+    """A spec whose btn_play asset carries a reference.
+
+    Appending the key to the file would attach it to the LAST [[assets]] block
+    (bg_sky), not btn_play — so the replacement is targeted instead.
+    """
+    spec = _prepare(tmp)
+    text = spec.read_text().replace(
+        'id = "btn_play"',
+        'id = "btn_play"\nreference = "%s"' % ref_value,
+        1,
+    )
+    spec.write_text(text)
+    return spec
+
+
+def test_asset_reference_overrides_the_style_bible():
+    tmp = tempfile.mkdtemp()
+    spec = _spec_with_btn_play_reference(tmp, "refs/own.png")
+    refs = spec.parent / "refs"
+    refs.mkdir(exist_ok=True)
+    (refs / "own.png").write_bytes(b"OWNREF")
+    with _Stubs({"btn_play": (b"A", 0.04)}) as stubs:
+        gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+    assert stubs.references == [b"OWNREF"]      # not the style bible's b"BIBLE"
+
+
+def test_a_missing_asset_reference_fails_only_that_asset():
+    tmp = tempfile.mkdtemp()
+    spec = _spec_with_btn_play_reference(tmp, "refs/nope.png")
+    with _Stubs({"btn_play": (b"A", 0.04)}) as stubs:
+        code = gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+    assert code == 1
+    assert stubs.prompts == []                # never reached the generator
+    records = {r["id"]: r for r in _manifest(tmp, "hc_v1")}
+    assert records["btn_play"]["status"] == "failed"
+    assert "reference" in records["btn_play"]["error"]
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
