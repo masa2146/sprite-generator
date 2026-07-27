@@ -1,4 +1,4 @@
-"""Transport tests. No network is touched. Run: python test_client.py"""
+"""Transport tests. No network is touched. Run: python3 test_client.py"""
 import base64
 import os
 
@@ -487,6 +487,32 @@ def test_generate_does_not_retry_4xx_other_than_429():
     finally:
         orclient.requests.post = original
     assert len(rec.calls) == 1
+
+
+def test_post_with_retry_raises_api_error_on_200_with_non_json_body():
+    """A proxy that answers 200 with an HTML error page (a --vision-base-url
+    missing its /v1, an unconfigured litellm route, a captive portal) must
+    raise ApiError, not let requests.exceptions.JSONDecodeError escape —
+    that's not an ApiError and cmd_analyze has no catch-all for it."""
+    class _NonJsonResp:
+        status_code = 200
+        text = "<html>not json</html>"
+
+        def json(self):
+            raise ValueError("not JSON")
+
+    rec = _Recorder([_NonJsonResp()])
+    original = orclient.requests.post
+    orclient.requests.post = rec
+    try:
+        try:
+            orclient.post_with_retry("http://svc/v1/x", {"a": 1}, {}, sleeper=lambda s: None)
+            raise AssertionError("expected ApiError")
+        except orclient.ApiError as exc:
+            assert exc.status == 200
+            assert "not json" in str(exc)
+    finally:
+        orclient.requests.post = original
 
 
 def test_post_with_retry_returns_the_parsed_body_and_retries_5xx():

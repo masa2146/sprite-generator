@@ -130,7 +130,7 @@ def update_pack(
         raise PackWriteError("update_pack: nothing to write")
 
     try:
-        original = path.read_text()
+        original = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise PackWriteError(f"cannot read {path}: {exc}")
 
@@ -156,12 +156,12 @@ def update_pack(
     backup = path.with_suffix(path.suffix + ".bak")
 
     try:
-        backup.write_text(original)
+        backup.write_text(original, encoding="utf-8")
     except OSError as exc:
         raise PackWriteError(f"cannot write backup {backup}: {exc}")
 
     try:
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         written = _parse(path)
         if prefix is not None and written.get("style", {}).get("prefix", "").strip() != prefix.strip():
             raise ValueError("prefix did not round-trip")
@@ -172,7 +172,17 @@ def update_pack(
             if len(ids) != len(existing.get("assets", [])) + 1:
                 raise ValueError("asset count changed unexpectedly")
     except Exception as exc:
-        path.write_text(original)
+        try:
+            path.write_text(original, encoding="utf-8")
+        except OSError as restore_exc:
+            # A partial write (disk full mid-write) is exactly the scenario
+            # where the restore can fail for the same reason. Losing this
+            # message would mean the user never learns `.bak` still holds
+            # their pack — worse than the original verification failure.
+            raise PackWriteError(
+                f"write to {path} did not verify ({exc}); restoring the original "
+                f"ALSO FAILED ({restore_exc}) — recover it from the backup at {backup}"
+            )
         raise PackWriteError(
             f"write to {path} did not verify ({exc}); the original has been restored "
             f"(a copy is also at {backup})"

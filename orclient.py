@@ -217,7 +217,15 @@ def post_with_retry(
             continue
 
         if resp.status_code == 200:
-            return resp.json()
+            try:
+                return resp.json()
+            except ValueError:
+                # A 200 with a non-JSON body (an HTML error page from a proxy
+                # missing /v1, an unconfigured litellm route, a captive
+                # portal) is easy to reach and must not surface as a bare
+                # requests.exceptions.JSONDecodeError — that's not an ApiError
+                # and cmd_analyze has no catch-all for it.
+                raise ApiError(f"200 response was not JSON: {resp.text[:200]}", 200)
 
         if resp.status_code == 429 or resp.status_code >= 500:
             last_error = ApiError(f"HTTP {resp.status_code}", resp.status_code)

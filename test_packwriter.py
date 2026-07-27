@@ -182,6 +182,35 @@ def test_file_is_restored_when_verification_fails(monkey=None):
     assert p.read_text() == original
 
 
+def test_restore_failure_after_a_bad_write_still_raises_pack_write_error():
+    """If the modified write fails verification AND the restore write also
+    fails (e.g. disk full mid-write, so both writes hit the same failure), a
+    bare OSError must not propagate in place of PackWriteError — that message
+    is the only thing telling the user their file is recoverable from .bak."""
+    import packwriter
+    p = _pack_file()
+    original = p.read_text()
+    broken_write = Path.write_text
+
+    def sabotage_write(self, text, *args, **kwargs):
+        # Every write to `p` fails — the modified write AND the restore that
+        # follows it, as a disk-full condition would do to both.
+        if self == p:
+            raise OSError("simulated disk full")
+        return broken_write(self, text, *args, **kwargs)
+
+    Path.write_text = sabotage_write
+    try:
+        update_pack(p, prefix="whatever")
+        raise AssertionError("expected PackWriteError")
+    except PackWriteError as exc:
+        assert "did not verify" in str(exc)
+        assert "restoring the original ALSO FAILED" in str(exc)
+        assert str(p.with_suffix(".toml.bak")) in str(exc)
+    finally:
+        Path.write_text = broken_write
+
+
 def test_no_op_call_is_rejected():
     p = _pack_file()
     try:
