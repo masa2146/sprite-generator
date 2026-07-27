@@ -60,19 +60,25 @@ def _prefix_literal(value: str) -> str:
     return f'"""\n{value.strip()}\n"""'
 
 
-def _section_body_span(text: str, header: str) -> tuple[int, int] | None:
-    """Character span of a section's body, from after its header to the next one."""
-    match = re.search(rf"^\[{re.escape(header)}\][ \t]*$", text, re.M)
+def _section_body_span(text: str, header: str, masked: str) -> tuple[int, int] | None:
+    """Character span of a section's body, from after its header to the next one.
+
+    Args:
+        text: Original TOML text
+        header: Section header name (e.g., "style")
+        masked: Text with multi-line strings blanked out; use for all regex searches
+    """
+    match = re.search(rf"^\[{re.escape(header)}\][ \t]*$", masked, re.M)
     if not match:
         return None
     start = match.end()
-    masked = _mask_multiline_strings(text)
     nxt = _SECTION.search(masked, start)
     return start, (nxt.start() if nxt else len(text))
 
 
 def _set_style_prefix(text: str, prefix: str) -> str:
-    span = _section_body_span(text, "style")
+    masked = _mask_multiline_strings(text)
+    span = _section_body_span(text, "style", masked)
     literal = _prefix_literal(prefix)
 
     if span is None:
@@ -80,7 +86,6 @@ def _set_style_prefix(text: str, prefix: str) -> str:
         # table order matters, and a [style] table after [[assets]] would be
         # parsed as belonging to the last asset.
         block = f"[style]\nprefix = {literal}\n\n"
-        masked = _mask_multiline_strings(text)
         first_asset = re.search(r"^\[\[assets\]\]", masked, re.M)
         if first_asset:
             return text[: first_asset.start()] + block + text[first_asset.start() :]

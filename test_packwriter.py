@@ -42,6 +42,11 @@ BRACKET_PACK = PACK.replace(
     'prefix = """\nold prefix line one,\n[not a real section]\nold prefix line two\n"""',
 )
 
+STYLE_IN_VALUE_PACK = PACK.replace(
+    '[pack]\nmodel = "bytedance-seed/seedream-4.5"',
+    '[pack]\nmodel = "bytedance-seed/seedream-4.5"\nnotes = """\n[style]\n"""',
+)
+
 
 def _pack_file(text=PACK):
     d = Path(tempfile.mkdtemp())
@@ -229,6 +234,16 @@ def test_new_prefix_with_bracket_line_works():
     update_pack(p, prefix=tricky_prefix)
     d = _load(p)
     assert d["style"]["prefix"].strip() == tricky_prefix
+
+
+def test_bracket_in_earlier_section_does_not_confuse_style_search():
+    """When [style] appears in a value before the real [style], find the real one."""
+    p = _pack_file(STYLE_IN_VALUE_PACK)
+    update_pack(p, prefix="new prefix text")
+    d = _load(p)
+    assert d["style"]["prefix"].strip() == "new prefix text"
+    assert [a["id"] for a in d["assets"]] == ["btn_play", "bg_sky"]
+    assert p.read_text().count("prefix =") == 1     # not two prefix keys
 
 
 if __name__ == "__main__":
