@@ -9,6 +9,8 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import envfile
+
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_KEY_ENV = "OPENROUTER_API_KEY"
 # "images" matches the default base_url (OpenRouter): it reaches far more image
@@ -218,4 +220,69 @@ def load_pack(
         vision_base_url=resolved_vision_base,
         vision_key_env=vision_key_env,
         vision_model=resolved_vision_model,
+    )
+
+
+def env_pack(
+    base_url: str | None = None,
+    model: str | None = None,
+    transport: str | None = None,
+    vision_base_url: str | None = None,
+    vision_model: str | None = None,
+    out_root: Path = Path("out"),
+) -> Pack:
+    """Build an ephemeral Pack from the environment, for the pack-less `make`.
+
+    Loads .env first (which never overrides a real environment variable), so
+    the resolution below sees file-provided values as if they had been
+    exported. key_env stores the NAME of whichever variable is populated, so
+    Pack.api_key() keeps working unchanged.
+    """
+    envfile.load_env()
+
+    resolved_base = base_url or os.environ.get("SPRITEGEN_BASE_URL") or DEFAULT_BASE_URL
+
+    resolved_model = model or os.environ.get("SPRITEGEN_MODEL")
+    if not resolved_model:
+        raise SpecError(
+            "no image model: set SPRITEGEN_MODEL in .env or the environment, "
+            "or pass --model"
+        )
+
+    resolved_transport = (
+        transport or os.environ.get("SPRITEGEN_TRANSPORT") or DEFAULT_TRANSPORT
+    )
+    if resolved_transport not in VALID_TRANSPORTS:
+        raise SpecError(
+            f"invalid transport {resolved_transport!r}: must be 'images' or 'chat' "
+            "(set SPRITEGEN_TRANSPORT or pass --transport)"
+        )
+
+    # Store the name of whichever key variable is actually populated.
+    key_env = "SPRITEGEN_API_KEY" if os.environ.get("SPRITEGEN_API_KEY") else DEFAULT_KEY_ENV
+    vision_key_env = (
+        "SPRITEGEN_VISION_API_KEY"
+        if os.environ.get("SPRITEGEN_VISION_API_KEY")
+        else key_env
+    )
+    _check_key_env(key_env, "SPRITEGEN_API_KEY")
+    _check_key_env(vision_key_env, "SPRITEGEN_VISION_API_KEY")
+
+    return Pack(
+        name="make",
+        base_url=resolved_base,
+        key_env=key_env,
+        model=resolved_model,
+        style_prefix="",
+        plate_prompt="",
+        assets=[],
+        out_root=Path(out_root),
+        transport=resolved_transport,
+        vision_base_url=(
+            vision_base_url
+            or os.environ.get("SPRITEGEN_VISION_BASE_URL")
+            or resolved_base
+        ),
+        vision_key_env=vision_key_env,
+        vision_model=vision_model or os.environ.get("SPRITEGEN_VISION_MODEL"),
     )

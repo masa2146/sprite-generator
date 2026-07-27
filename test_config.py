@@ -386,6 +386,116 @@ def test_vision_key_env_credential_guard():
         assert "key_env" in str(exc)
 
 
+# --- env_pack ---------------------------------------------------------------
+
+_ENV_VARS = (
+    "SPRITEGEN_BASE_URL", "SPRITEGEN_API_KEY", "SPRITEGEN_MODEL",
+    "SPRITEGEN_TRANSPORT", "SPRITEGEN_VISION_BASE_URL",
+    "SPRITEGEN_VISION_API_KEY", "SPRITEGEN_VISION_MODEL", "OPENROUTER_API_KEY",
+)
+
+
+def _clear_spritegen():
+    for k in _ENV_VARS:
+        os.environ.pop(k, None)
+
+
+def test_env_pack_reads_the_environment():
+    _clear_spritegen()
+    os.environ.update({
+        "SPRITEGEN_BASE_URL": "http://env/v1",
+        "SPRITEGEN_MODEL": "env/model",
+        "SPRITEGEN_API_KEY": "sk-env",
+        "SPRITEGEN_VISION_MODEL": "env/vision",
+    })
+    try:
+        from config import env_pack
+        p = env_pack()
+        assert p.base_url == "http://env/v1"
+        assert p.model == "env/model"
+        assert p.api_key() == "sk-env"
+        assert p.vision_model == "env/vision"
+        assert p.assets == []
+    finally:
+        _clear_spritegen()
+
+
+def test_env_pack_falls_back_to_openrouter_api_key():
+    _clear_spritegen()
+    os.environ.update({"SPRITEGEN_MODEL": "m", "OPENROUTER_API_KEY": "sk-legacy"})
+    try:
+        from config import env_pack
+        assert env_pack().api_key() == "sk-legacy"
+    finally:
+        _clear_spritegen()
+
+
+def test_env_pack_vision_falls_back_to_the_main_endpoint_and_key():
+    _clear_spritegen()
+    os.environ.update({
+        "SPRITEGEN_BASE_URL": "http://main/v1",
+        "SPRITEGEN_MODEL": "m",
+        "SPRITEGEN_API_KEY": "sk-main",
+    })
+    try:
+        from config import env_pack
+        p = env_pack()
+        assert p.vision_base_url == "http://main/v1"
+        assert p.vision_api_key() == "sk-main"
+        assert p.vision_model is None
+    finally:
+        _clear_spritegen()
+
+
+def test_env_pack_cli_arguments_win():
+    _clear_spritegen()
+    os.environ.update({"SPRITEGEN_MODEL": "env/model"})
+    try:
+        from config import env_pack
+        p = env_pack(model="cli/model", base_url="http://cli/v1",
+                     vision_model="cli/vision")
+        assert p.model == "cli/model"
+        assert p.base_url == "http://cli/v1"
+        assert p.vision_model == "cli/vision"
+    finally:
+        _clear_spritegen()
+
+
+def test_env_pack_without_a_model_is_an_error():
+    _clear_spritegen()
+    from config import env_pack
+    try:
+        env_pack()
+        raise AssertionError("expected SpecError")
+    except SpecError as exc:
+        assert "SPRITEGEN_MODEL" in str(exc)
+
+
+def test_env_pack_rejects_an_invalid_transport():
+    _clear_spritegen()
+    os.environ.update({"SPRITEGEN_MODEL": "m", "SPRITEGEN_TRANSPORT": "carrier-pigeon"})
+    try:
+        from config import env_pack
+        env_pack()
+        raise AssertionError("expected SpecError")
+    except SpecError as exc:
+        assert "transport" in str(exc)
+    finally:
+        _clear_spritegen()
+
+
+def test_env_pack_defaults_transport_and_base_url():
+    _clear_spritegen()
+    os.environ.update({"SPRITEGEN_MODEL": "m"})
+    try:
+        from config import env_pack
+        p = env_pack()
+        assert p.transport == DEFAULT_TRANSPORT
+        assert p.base_url == DEFAULT_BASE_URL
+    finally:
+        _clear_spritegen()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
