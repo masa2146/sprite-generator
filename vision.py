@@ -153,6 +153,18 @@ def reproduction_prompt(schema: dict) -> str:
     return f"{schema['subject'].strip()}, {style_prefix(schema)}"
 
 
+def subject_prompt(schema: dict) -> str:
+    """One object's identity and construction, without any style fields.
+
+    For a pack asset: the pack's [style] prefix supplies style at build time,
+    so an asset prompt carrying style would double it. But subject alone is
+    too narrow to rebuild an object from — form and detail are what this
+    schema grew to carry.
+    """
+    parts = [schema.get(f) for f in SUBJECT_FIELDS]
+    return ", ".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
+
+
 def object_prompt(schema: dict) -> str:
     """The full single-object prompt: identity, geometry, detail, then style.
 
@@ -176,7 +188,8 @@ def analyze(pack, image_bytes: bytes, user_text: str | None = None,
         # model for vision, so telling the user to set it would "fix" analyze
         # by pointing build at a vision model that can't generate images.
         raise AnalysisError(
-            "no vision model: set [vision] model, or pass --vision-model"
+            "no vision model: set [vision] model, pass --vision-model, or set "
+            "SPRITEGEN_VISION_MODEL"
         )
 
     instruction = ANALYSIS_PROMPT

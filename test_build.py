@@ -856,12 +856,15 @@ def test_analyze_style_bible_write_failure_reports_the_partial_state():
 
 
 def test_analyze_add_asset_appends_the_subject():
-    """The stored asset prompt must be the bare subject, matching every other
-    asset in the pack — the style prefix is applied at build time by
-    full_prompt(), not frozen into this one asset's own prompt. Embedding the
-    reproduction prompt (subject + prefix) here would double the style now and
-    freeze a stale copy of the prefix, silently drifting the moment [style]
-    prefix is edited or re-analyzed."""
+    """The stored asset prompt must carry subject, form and detail (one
+    object's identity and construction) but no style field — the style prefix
+    is applied at build time by full_prompt(), not frozen into this one
+    asset's own prompt. Embedding the reproduction prompt (subject + prefix)
+    here would double the style now and freeze a stale copy of the prefix,
+    silently drifting the moment [style] prefix is edited or re-analyzed.
+    Bare subject alone, however, is too narrow to rebuild the object from —
+    form and detail are what those fields exist for on a single-object asset
+    like this one."""
     tmp = tempfile.mkdtemp()
     spec, img = _analyze_pack(tmp)
     with _VisionStub(result=ANALYSIS_SCHEMA):
@@ -872,7 +875,11 @@ def test_analyze_add_asset_appends_the_subject():
     with open(spec, "rb") as fh:
         assets = tomllib.load(fh)["assets"]
     assert assets[-1]["id"] == "coin_ref"
-    assert assets[-1]["prompt"] == ANALYSIS_SCHEMA["subject"]
+    assert assets[-1]["prompt"] == (
+        f"{ANALYSIS_SCHEMA['subject']}, {ANALYSIS_SCHEMA['form']}, {ANALYSIS_SCHEMA['detail']}"
+    )
+    assert ANALYSIS_SCHEMA["form"] in assets[-1]["prompt"]
+    assert ANALYSIS_SCHEMA["detail"] in assets[-1]["prompt"]
     # A regression back to the reproduction prompt (subject + ", " + style
     # prefix) would fail here: no style field belongs in the stored prompt.
     assert "soft 3D render, glossy plastic" not in assets[-1]["prompt"]
