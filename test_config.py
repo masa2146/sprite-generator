@@ -62,13 +62,31 @@ def _write(text, name="hc_v1.toml"):
     return p
 
 
+_ABSENT_ENV = Path(tempfile.mkdtemp()) / "absent.env"
+
+_ENV_VARS = (
+    "SPRITEGEN_BASE_URL", "SPRITEGEN_API_KEY", "SPRITEGEN_MODEL",
+    "SPRITEGEN_TRANSPORT", "SPRITEGEN_VISION_BASE_URL",
+    "SPRITEGEN_VISION_API_KEY", "SPRITEGEN_VISION_MODEL", "OPENROUTER_API_KEY",
+    # SPEC_KEY / OMNIROUTE_API_KEY are [api]/[vision] key_env names used by
+    # specs in this file; OMNIROUTE_API_KEY is also the one the README tells
+    # users to export, so a test that fails only for users who followed the
+    # README would be worse than no test.
+    "SPEC_KEY", "OMNIROUTE_API_KEY",
+)
+
+
 def _clear_env():
-    # OMNIROUTE_API_KEY is the [vision] key_env the README tells users to
-    # export; a test that fails only for users who followed the README is
-    # worse than no test.
-    for k in ("SPRITEGEN_BASE_URL", "SPRITEGEN_MODEL", "SPEC_KEY", "OPENROUTER_API_KEY",
-              "OMNIROUTE_API_KEY"):
+    """Empty environment AND point envfile at a nonexistent .env.
+
+    load_pack and env_pack both call envfile.load_env() now, so a real .env
+    in the project root would otherwise leak into every test in this file.
+    One helper for both entry points (rather than load_pack's and env_pack's
+    own separate copies) means there's only one place that can go stale.
+    """
+    for k in _ENV_VARS:
         os.environ.pop(k, None)
+    envfile.DEFAULT_ENV_PATH = _ABSENT_ENV
 
 
 def test_pack_name_comes_from_spec_filename():
@@ -390,25 +408,8 @@ def test_vision_key_env_credential_guard():
 
 # --- env_pack ---------------------------------------------------------------
 
-_ENV_VARS = (
-    "SPRITEGEN_BASE_URL", "SPRITEGEN_API_KEY", "SPRITEGEN_MODEL",
-    "SPRITEGEN_TRANSPORT", "SPRITEGEN_VISION_BASE_URL",
-    "SPRITEGEN_VISION_API_KEY", "SPRITEGEN_VISION_MODEL", "OPENROUTER_API_KEY",
-)
-
-_ABSENT_ENV = Path(tempfile.mkdtemp()) / "absent.env"
-
-
-def _clear_spritegen():
-    """Empty environment AND no .env — env_pack loads the file itself, so a
-    real .env in the project root would fill variables these tests leave empty."""
-    for k in _ENV_VARS:
-        os.environ.pop(k, None)
-    envfile.DEFAULT_ENV_PATH = _ABSENT_ENV
-
-
 def test_env_pack_reads_the_environment():
-    _clear_spritegen()
+    _clear_env()
     os.environ.update({
         "SPRITEGEN_BASE_URL": "http://env/v1",
         "SPRITEGEN_MODEL": "env/model",
@@ -424,21 +425,21 @@ def test_env_pack_reads_the_environment():
         assert p.vision_model == "env/vision"
         assert p.assets == []
     finally:
-        _clear_spritegen()
+        _clear_env()
 
 
 def test_env_pack_falls_back_to_openrouter_api_key():
-    _clear_spritegen()
+    _clear_env()
     os.environ.update({"SPRITEGEN_MODEL": "m", "OPENROUTER_API_KEY": "sk-legacy"})
     try:
         from config import env_pack
         assert env_pack().api_key() == "sk-legacy"
     finally:
-        _clear_spritegen()
+        _clear_env()
 
 
 def test_env_pack_vision_falls_back_to_the_main_endpoint_and_key():
-    _clear_spritegen()
+    _clear_env()
     os.environ.update({
         "SPRITEGEN_BASE_URL": "http://main/v1",
         "SPRITEGEN_MODEL": "m",
@@ -451,11 +452,11 @@ def test_env_pack_vision_falls_back_to_the_main_endpoint_and_key():
         assert p.vision_api_key() == "sk-main"
         assert p.vision_model is None
     finally:
-        _clear_spritegen()
+        _clear_env()
 
 
 def test_env_pack_cli_arguments_win():
-    _clear_spritegen()
+    _clear_env()
     os.environ.update({"SPRITEGEN_MODEL": "env/model"})
     try:
         from config import env_pack
@@ -464,12 +465,15 @@ def test_env_pack_cli_arguments_win():
         assert p.model == "cli/model"
         assert p.base_url == "http://cli/v1"
         assert p.vision_model == "cli/vision"
+        # No --vision-base-url given: it falls back to the resolved base_url,
+        # which is the CLI's, not the env's — untested until now.
+        assert p.vision_base_url == "http://cli/v1"
     finally:
-        _clear_spritegen()
+        _clear_env()
 
 
 def test_env_pack_without_a_model_is_an_error():
-    _clear_spritegen()
+    _clear_env()
     from config import env_pack
     try:
         env_pack()
@@ -479,7 +483,7 @@ def test_env_pack_without_a_model_is_an_error():
 
 
 def test_env_pack_rejects_an_invalid_transport():
-    _clear_spritegen()
+    _clear_env()
     os.environ.update({"SPRITEGEN_MODEL": "m", "SPRITEGEN_TRANSPORT": "carrier-pigeon"})
     try:
         from config import env_pack
@@ -488,11 +492,11 @@ def test_env_pack_rejects_an_invalid_transport():
     except SpecError as exc:
         assert "transport" in str(exc)
     finally:
-        _clear_spritegen()
+        _clear_env()
 
 
 def test_env_pack_defaults_transport_and_base_url():
-    _clear_spritegen()
+    _clear_env()
     os.environ.update({"SPRITEGEN_MODEL": "m"})
     try:
         from config import env_pack
@@ -500,12 +504,12 @@ def test_env_pack_defaults_transport_and_base_url():
         assert p.transport == DEFAULT_TRANSPORT
         assert p.base_url == DEFAULT_BASE_URL
     finally:
-        _clear_spritegen()
+        _clear_env()
 
 
 def test_env_pack_ignores_a_dot_env_when_the_environment_is_explicit():
     """A .env must not override a variable the caller set."""
-    _clear_spritegen()
+    _clear_env()
     d = Path(tempfile.mkdtemp())
     envpath = d / ".env"
     envpath.write_text("SPRITEGEN_MODEL=from-file\n", encoding="utf-8")
@@ -515,7 +519,7 @@ def test_env_pack_ignores_a_dot_env_when_the_environment_is_explicit():
         from config import env_pack
         assert env_pack().model == "from-environment"
     finally:
-        _clear_spritegen()
+        _clear_env()
 
 
 if __name__ == "__main__":

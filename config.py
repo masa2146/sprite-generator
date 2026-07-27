@@ -137,6 +137,12 @@ def load_pack(
     out_root: Path = Path("out"),
 ) -> Pack:
     """Load a TOML spec. Precedence: CLI arg > spec file > env var > default."""
+    # load_pack already reads SPRITEGEN_BASE_URL/MODEL/TRANSPORT from
+    # os.environ below — the same variables .env.example documents for
+    # `make`. Loading .env here too means a user who sets one in .env gets
+    # the same behaviour from both build and make, instead of make honouring
+    # it and build claiming it isn't set.
+    envfile.load_env()
     spec_path = Path(spec_path)
     try:
         with spec_path.open("rb") as fh:
@@ -265,8 +271,10 @@ def env_pack(
         if os.environ.get("SPRITEGEN_VISION_API_KEY")
         else key_env
     )
-    _check_key_env(key_env, "SPRITEGEN_API_KEY")
-    _check_key_env(vision_key_env, "SPRITEGEN_VISION_API_KEY")
+    # Unlike load_pack's key_env, these are always one of three hardcoded
+    # literals above — never untrusted TOML — so _check_key_env can never
+    # fire here. No guard needed (load_pack's guard stays: it validates a
+    # value read from the spec file).
 
     return Pack(
         name="make",
