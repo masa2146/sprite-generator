@@ -188,6 +188,179 @@ def test_a_refs_dir_outside_the_pack_dir_still_gets_a_relative_reference():
     assert ref.startswith("..")
 
 
+# --- the command ------------------------------------------------------------
+
+import json
+import os
+
+import gen
+
+OBJECTS_REPLY = {
+    "style": {"render": "soft 3D", "camera": "top-down", "lighting": "soft",
+              "palette": "#111111", "linework": "no outline", "realism": "cartoon"},
+    "objects": [
+        {"id": "alpha", "bbox": [10, 10, 110, 110], "animated": True,
+         "views": ["front", "side"], "subject": "a thing", "form": "round", "detail": "shiny"},
+        {"id": "beta", "bbox": [200, 300, 260, 380], "animated": False,
+         "views": ["front"], "subject": "another", "form": "boxy", "detail": "matte"},
+    ],
+}
+
+
+class _VisionStub:
+    def __init__(self, reply=None, error=None):
+        self.reply = reply if reply is not None else OBJECTS_REPLY
+        self.error = error
+        self.calls = 0
+
+    def __enter__(self):
+        self._orig = gen.vision.analyze_objects
+        import envfile
+        self._env = envfile.DEFAULT_ENV_PATH
+        envfile.DEFAULT_ENV_PATH = Path(tempfile.mkdtemp()) / "absent.env"
+
+        def fake(pack, image_bytes, **kw):
+            self.calls += 1
+            if self.error:
+                raise self.error
+            return self.reply, json.dumps(self.reply)
+
+        gen.vision.analyze_objects = fake
+        return self
+
+    def __exit__(self, *exc):
+        gen.vision.analyze_objects = self._orig
+        import envfile
+        envfile.DEFAULT_ENV_PATH = self._env
+
+
+def _env_ready():
+    os.environ.update({"SPRITEGEN_MODEL": "img/model",
+                       "SPRITEGEN_VISION_MODEL": "vis/model",
+                       "SPRITEGEN_API_KEY": "sk-test"})
+
+
+def _env_clear():
+    for k in ("SPRITEGEN_MODEL", "SPRITEGEN_VISION_MODEL", "SPRITEGEN_API_KEY"):
+        os.environ.pop(k, None)
+
+
+def _scene(tmp):
+    p = Path(tmp) / "scene.png"
+    _img().save(p)
+    return p
+
+
+def test_extract_writes_pack_crops_and_sheet():
+    tmp = tempfile.mkdtemp(); _env_ready()
+    try:
+        pack = Path(tmp) / "out.toml"
+        with _VisionStub():
+            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                             "--no-open"])
+        assert code == 0
+        assert pack.exists()
+        refs = Path(tmp) / "refs"
+        assert (refs / "alpha.png").exists() and (refs / "beta.png").exists()
+        assert (refs / "_contact_sheet.png").exists()
+        ids = [a["id"] for a in tomllib.loads(pack.read_text())["assets"]]
+        assert ids == ["alpha-front", "alpha-side", "beta-front"]
+    finally:
+        _env_clear()
+
+
+def test_extract_refuses_to_overwrite_an_existing_pack():
+    tmp = tempfile.mkdtemp(); _env_ready()
+    try:
+        pack = Path(tmp) / "out.toml"
+        pack.write_text("# mine\n")
+        with _VisionStub() as stub:
+            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                             "--no-open"])
+        assert code == 1
+        assert pack.read_text() == "# mine\n"
+        assert stub.calls == 0            # refused before spending the vision call
+    finally:
+        _env_clear()
+
+
+def test_extract_dry_run_writes_nothing():
+    tmp = tempfile.mkdtemp(); _env_ready()
+    try:
+        pack = Path(tmp) / "out.toml"
+        with _VisionStub():
+            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                             "--no-open", "--dry-run"])
+        assert code == 0
+        assert not pack.exists()
+        assert not (Path(tmp) / "refs").exists()
+    finally:
+        _env_clear()
+
+
+def test_extract_reports_rejected_boxes_and_keeps_the_rest():
+    tmp = tempfile.mkdtemp(); _env_ready()
+    reply = json.loads(json.dumps(OBJECTS_REPLY))
+    reply["objects"].append({"id": "whole", "bbox": [0, 0, 400, 600], "animated": False,
+                             "views": ["front"], "subject": "s", "form": "f", "detail": "d"})
+    try:
+        pack = Path(tmp) / "out.toml"
+        with _VisionStub(reply=reply):
+            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                             "--no-open"])
+        assert code == 0
+        ids = [a["id"] for a in tomllib.loads(pack.read_text())["assets"]]
+        assert "whole-front" not in ids
+        assert not (Path(tmp) / "refs" / "whole.png").exists()
+    finally:
+        _env_clear()
+
+
+def test_extract_fails_when_every_box_is_rejected():
+    tmp = tempfile.mkdtemp(); _env_ready()
+    reply = {"style": OBJECTS_REPLY["style"],
+             "objects": [{"id": "whole", "bbox": [0, 0, 400, 600], "animated": False,
+                          "views": ["front"], "subject": "s", "form": "f", "detail": "d"}]}
+    try:
+        pack = Path(tmp) / "out.toml"
+        with _VisionStub(reply=reply):
+            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                             "--no-open"])
+        assert code == 1
+        assert not pack.exists()
+    finally:
+        _env_clear()
+
+
+def test_extract_caps_the_object_count():
+    tmp = tempfile.mkdtemp(); _env_ready()
+    reply = {"style": OBJECTS_REPLY["style"], "objects": []}
+    for i in range(20):
+        reply["objects"].append(
+            {"id": f"o{i}", "bbox": [10, 10, 60, 60], "animated": False,
+             "views": ["front"], "subject": "s", "form": "f", "detail": "d"})
+    try:
+        pack = Path(tmp) / "out.toml"
+        with _VisionStub(reply=reply):
+            gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                      "--no-open", "--max-objects", "5"])
+        assert len(tomllib.loads(pack.read_text())["assets"]) == 5
+    finally:
+        _env_clear()
+
+
+def test_extract_missing_image_exits_cleanly():
+    tmp = tempfile.mkdtemp(); _env_ready()
+    try:
+        with _VisionStub() as stub:
+            code = gen.main(["extract", "-i", str(Path(tmp) / "nope.png"),
+                             "--pack", str(Path(tmp) / "out.toml"), "--no-open"])
+        assert code == 1
+        assert stub.calls == 0
+    finally:
+        _env_clear()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

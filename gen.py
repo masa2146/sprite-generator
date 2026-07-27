@@ -11,6 +11,7 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import re
 import shutil
@@ -23,6 +24,7 @@ from pathlib import Path
 from PIL import Image
 
 import config
+import extract
 import orclient
 import packwriter
 import post
@@ -638,6 +640,107 @@ def cmd_make(args):
     return 1 if (failed or stopped_early or written == 0) else 0
 
 
+def cmd_extract(args):
+    pack_path = Path(args.pack)
+    if pack_path.exists():
+        # Refuse before spending the vision call. A pack the user has already
+        # pruned by hand is the most valuable thing in this flow to lose.
+        print(f"error: {pack_path} already exists — delete it or choose another path",
+              file=sys.stderr)
+        return 1
+
+    image_path = Path(args.image)
+    try:
+        image_bytes = image_path.read_bytes()
+    except OSError as exc:
+        print(f"error: cannot read {image_path}: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        pack = config.env_pack(
+            base_url=args.base_url, model=args.model, transport=args.transport,
+            vision_base_url=args.vision_base_url, vision_model=args.vision_model,
+            out_root=Path(args.out_root),
+        )
+    except config.SpecError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.image and pack.vision_key_env and pack.vision_api_key() is None:
+        print(f"error: ${pack.vision_key_env} is not set", file=sys.stderr)
+        return 1
+
+    try:
+        schema, _raw = vision.analyze_objects(pack, image_bytes)
+    except vision.AnalysisError as exc:
+        return _report_analysis_error(exc, image_path)
+    except orclient.ApiError as exc:
+        print(f"error: vision request failed: {exc}", file=sys.stderr)
+        return 1
+
+    objects = schema["objects"]
+    if len(objects) > args.max_objects:
+        print(f"note: {len(objects)} objects found, keeping the first "
+              f"{args.max_objects} (raise --max-objects to keep more)")
+        objects = objects[: args.max_objects]
+
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except Exception as exc:
+        print(f"error: cannot decode {image_path}: {exc}", file=sys.stderr)
+        return 1
+
+    refs_dir = Path(args.refs_dir) if args.refs_dir else pack_path.parent / "refs"
+
+    if args.dry_run:
+        print(f"style: {', '.join(schema['style'].get(f, '') for f in vision.STYLE_FIELDS)}\n")
+        for obj in objects:
+            reason = extract.reject_reason(obj.get("bbox"), image.width, image.height)
+            state = "ANIMATED" if obj.get("animated") else "static"
+            mark = f"REJECT ({reason})" if reason else ",".join(obj.get("views") or [])
+            print(f"  {obj.get('id', '?'):<20} {state:<9} {mark}")
+        print(f"\ndry run: nothing written (would write {pack_path} and {refs_dir})")
+        return 0
+
+    try:
+        kept, rejected = extract.crop_objects(image, objects, refs_dir)
+    except OSError as exc:
+        print(f"error: cannot write crops to {refs_dir}: {exc}", file=sys.stderr)
+        return 1
+
+    for obj_id, reason in rejected:
+        print(f"  dropped {obj_id}: {reason}", file=sys.stderr)
+
+    if not kept:
+        print("error: no usable objects — nothing written", file=sys.stderr)
+        return 1
+
+    sheet = None
+    try:
+        sheet = extract.labelled_sheet(kept, refs_dir / "_contact_sheet.png")
+    except Exception as exc:
+        # The sheet is a review aid, not the deliverable — losing it must not
+        # cost the user the crops and the pack they already paid for.
+        print(f"warning: contact sheet not written: {exc}", file=sys.stderr)
+
+    text = extract.pack_text(pack.model, schema["style"], kept, refs_dir, pack_path)
+    try:
+        pack_path.parent.mkdir(parents=True, exist_ok=True)
+        pack_path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        print(f"error: cannot write {pack_path}: {exc}", file=sys.stderr)
+        return 1
+
+    total = sum(len(o.get("views") or [1]) for o in kept)
+    print(f"\n{len(kept)} objects, {total} assets -> {pack_path}")
+    print(f"crops -> {refs_dir}")
+    if sheet and not args.no_open:
+        webbrowser.open(Path(sheet).resolve().as_uri())
+    print(f"\nreview the sheet, prune the pack, then:\n"
+          f"  python3 gen.py build {pack_path} --dry-run")
+    return 0
+
+
 def _add_endpoint_flags(sub):
     sub.add_argument("--base-url", default=None, help="override [api] base_url")
     sub.add_argument("--model", default=None, help="override [pack] model")
@@ -708,6 +811,23 @@ def main(argv=None):
                       help=f"USD ceiling (default {DEFAULT_MAX_COST})")
     _add_endpoint_flags(make)
     make.set_defaults(func=cmd_make)
+
+    extract_p = subs.add_parser(
+        "extract", help="find every sprite in an image and write a buildable pack")
+    extract_p.add_argument("-i", "--image", required=True, help="source image")
+    extract_p.add_argument("--pack", required=True, help="pack file to create")
+    extract_p.add_argument("--refs-dir", default=None,
+                           help="where crops go (default: refs/ beside the pack)")
+    extract_p.add_argument("--max-objects", type=int,
+                           default=extract.DEFAULT_MAX_OBJECTS,
+                           help=f"cap (default {extract.DEFAULT_MAX_OBJECTS})")
+    extract_p.add_argument("--no-open", action="store_true",
+                           help="do not open the contact sheet")
+    extract_p.add_argument("--dry-run", action="store_true",
+                           help="print what would be written (the vision call is still "
+                                "made and still costs)")
+    _add_endpoint_flags(extract_p)
+    extract_p.set_defaults(func=cmd_extract)
 
     args = parser.parse_args(argv)
     return args.func(args)
