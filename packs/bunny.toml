@@ -15,7 +15,7 @@ key_env  = "OMNIROUTE_API_KEY"
 model    = "cc/claude-sonnet-5"   # opus-5 rejects image input on this proxy (401)
 
 [pack]
-model = "google/gemini-2.5-flash-image"   # ~$0.039/image, cheapest image model
+model = "black-forest-labs/flux.2-max"   # $0.07/megapixel on OpenRouter
 
 [style]
 prefix = """
@@ -40,4 +40,4 @@ prompt = "a small launcher chute that a ball is fired from, pale blue-grey metal
 
 [[assets]]
 id     = "bunny_ball"
-prompt = "a plump round white bunny character shaped like a ball, long upright ears, tiny closed smiling eyes, small pink nose, glossy surface, front view"
+prompt = "a plump ball-shaped white rabbit toy, round body, two long upright ears, two small dot eyes, tiny pink nose, glossy vinyl surface, front view"
