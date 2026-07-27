@@ -1,13 +1,17 @@
 """`make` command tests. No network, no rembg. Run: python3 test_make.py"""
+import base64
 import json
 import os
 import tempfile
-from io import BytesIO
+from contextlib import redirect_stdout
+from io import BytesIO, StringIO
 from pathlib import Path
 
 from PIL import Image
 
 import gen
+import orclient
+import post
 
 
 def _png(color=(10, 20, 30)):
@@ -332,6 +336,240 @@ def test_missing_image_model_exits_cleanly():
         assert s.prompts == []
     finally:
         _clear()
+
+
+# --- build-vs-make parity (final review) ------------------------------------
+
+def test_blank_text_and_no_image_is_an_error():
+    """The input guard tests truthiness, not content — `-t "   "` used to sail
+    through, pay for an empty prompt, and exit 0."""
+    tmp = tempfile.mkdtemp(); _env()
+    try:
+        with _Stubs() as s:
+            code = gen.main(["make", "-t", "   ", "--out-root", tmp])
+        assert code == 1
+        assert s.prompts == []
+    finally:
+        _clear()
+
+
+def test_missing_api_key_exits_before_any_request():
+    """Same diagnosis build/init/analyze give for a missing key: fail fast
+    instead of a 401 after three retries per variant."""
+    tmp = tempfile.mkdtemp()
+    _clear()
+    os.environ.pop("OPENROUTER_API_KEY", None)
+    os.environ["SPRITEGEN_MODEL"] = "img/model"
+    try:
+        with _Stubs() as s:
+            code = gen.main(["make", "-t", "a coin", "--out-root", tmp])
+        assert code == 1
+        assert s.prompts == []
+    finally:
+        _clear()
+
+
+def test_missing_vision_key_exits_before_any_request_when_image_given():
+    """Mirrors cmd_analyze's vision-key guard. env_pack's own resolution
+    happens to make this unreachable in practice today (an unset
+    SPRITEGEN_VISION_API_KEY falls back to the same variable the main key
+    check already required to be set) — so this exercises cmd_make's guard
+    directly against a hand-built Pack, the way it would matter if env_pack's
+    fallback ever decoupled the two keys."""
+    from config import Pack
+    tmp = tempfile.mkdtemp()
+    img = _image_file(tmp)
+    fake_pack = Pack(
+        name="make", base_url="http://x/v1", key_env="SPRITEGEN_API_KEY",
+        model="img/model", style_prefix="", plate_prompt="", assets=[],
+        out_root=Path(tmp), vision_base_url="http://x/v1",
+        vision_key_env="ABSENT_VISION_KEY_VAR", vision_model="vis/model",
+    )
+    os.environ.pop("ABSENT_VISION_KEY_VAR", None)
+    _env()
+    orig_env_pack = gen.config.env_pack
+    gen.config.env_pack = lambda **kw: fake_pack
+    try:
+        with _Stubs() as s:
+            code = gen.main(["make", "-i", str(img), "--out-root", tmp])
+        assert code == 1
+        assert s.analyze_calls == []
+    finally:
+        gen.config.env_pack = orig_env_pack
+        _clear()
+
+
+def test_missing_image_in_response_writes_error_json():
+    """Finding 7: cmd_make used to fold ImageMissing in with ApiError and
+    print only "no image in response" — build_one dumps the raw response to
+    disk instead, and `make` is the command most likely pointed at an
+    unfamiliar model where that raw reply matters most."""
+    tmp = tempfile.mkdtemp(); _env()
+    outcomes = [orclient.ImageMissing({"choices": [{"message": {"content": "refused"}}]})]
+    try:
+        with _Stubs(outcomes=outcomes):
+            code = gen.main(["make", "-t", "a coin", "--out-root", tmp])
+        assert code == 1
+        errors = list((Path(tmp) / "make").glob("*.error.json"))
+        assert len(errors) == 1
+        dumped = json.loads(errors[0].read_text())
+        assert dumped["choices"][0]["message"]["content"] == "refused"
+    finally:
+        _clear()
+
+
+def test_post_processing_failure_still_writes_a_sidecar_naming_the_failure():
+    """Finding 2: a post-processing failure used to `continue` before the
+    sidecar write, leaving a paid-for .raw.png with no provenance at all —
+    the one case where the file is non-standard and the money is spent."""
+    tmp = tempfile.mkdtemp(); _env()
+    try:
+        with _Stubs() as s:
+            def boom(data):
+                raise RuntimeError("shape error")
+            gen.post.cut_background = boom
+            code = gen.main(["make", "-t", "a coin", "--out-root", tmp])
+        assert code == 1
+        out = Path(tmp) / "make"
+        raws = list(out.glob("*.raw.png"))
+        jsons = list(out.glob("*.json"))
+        pngs = [p for p in out.glob("*.png") if not p.name.endswith(".raw.png")]
+        assert len(raws) == 1 and len(jsons) == 1 and len(pngs) == 0
+        side = json.loads(jsons[0].read_text())
+        assert side["status"] == "failed"
+        assert "shape error" in side["error"]
+        assert "raw kept as" in side["error"]
+        assert side["file"] is None
+    finally:
+        _clear()
+
+
+def test_cost_unknown_when_no_variant_reports_cost():
+    """Finding 4: `if cost: spent += cost` plus an unconditional "(${spent})"
+    printed "$0.00" for a run that may have cost real money — a positive
+    claim of zero, not "unknown", for exactly the local-endpoint case
+    response_cost's own docstring calls the common one."""
+    tmp = tempfile.mkdtemp(); _env()
+    try:
+        with _Stubs(outcomes=[(b"A", None)]):
+            buf = StringIO()
+            with redirect_stdout(buf):
+                code = gen.main(["make", "-t", "a coin", "--out-root", tmp])
+        assert code == 0
+        out = buf.getvalue()
+        assert "cost unknown" in out
+        assert "$0.00" not in out
+    finally:
+        _clear()
+
+
+def test_legitimate_zero_cost_is_not_reported_as_unknown():
+    """The other half of Finding 4: `if cost:` treated an honestly-reported
+    0.0 the same as a missing cost. A real 0.0 must count as cost_seen."""
+    tmp = tempfile.mkdtemp(); _env()
+    try:
+        with _Stubs(outcomes=[(b"A", 0.0)]):
+            buf = StringIO()
+            with redirect_stdout(buf):
+                code = gen.main(["make", "-t", "a coin", "--out-root", tmp])
+        assert code == 0
+        assert "cost unknown" not in buf.getvalue()
+        assert "$0.00" in buf.getvalue()
+    finally:
+        _clear()
+
+
+def test_cost_ceiling_stop_returns_exit_one_even_with_zero_failures():
+    """Finding 14: cmd_make used to return 0 after breaking on the cost
+    ceiling as long as nothing outright failed — cmd_build deliberately
+    returns 1 for exactly this, so a caller chaining `&& upload` doesn't
+    treat a truncated run as a clean success."""
+    tmp = tempfile.mkdtemp(); _env()
+    try:
+        with _Stubs(outcomes=[(b"A", 0.05), (b"B", 0.05), (b"C", 0.05)]) as s:
+            code = gen.main(["make", "-t", "a coin", "-n", "3",
+                             "--max-cost", "0.05", "--out-root", tmp])
+        assert code == 1
+        assert len(s.prompts) == 1  # spent 0.05 after the first, budget exhausted
+    finally:
+        _clear()
+
+
+def test_sidecar_reference_path_is_resolved():
+    """Finding 15: a relative --image path in the sidecar may be unresolvable
+    when someone reads it later from a different working directory."""
+    tmp = tempfile.mkdtemp(); _env()
+    img = _image_file(tmp)
+    try:
+        with _Stubs():
+            gen.main(["make", "-i", str(img), "--out-root", tmp])
+        side = json.loads(next((Path(tmp) / "make").glob("*.json")).read_text())
+        assert side["reference"] == str(img.resolve())
+    finally:
+        _clear()
+
+
+def test_make_real_chain_sends_reference_image_as_input_references():
+    """The reference image is the actual basis of the "make the same thing"
+    scenario, yet every test above (like every test in this file before this
+    wave) stubs vision.analyze and orclient.generate directly — nothing
+    asserted that `make -i` actually puts the image on the wire. Mirrors
+    test_build.py's real-seam tests: stubs only requests.post (network) and
+    post.cut_background (avoids downloading rembg weights), and runs a real
+    `make -i` through the real config.env_pack, vision.analyze and
+    orclient.generate."""
+    tmp = tempfile.mkdtemp()
+    img = _image_file(tmp)
+    ref_bytes = img.read_bytes()
+
+    subject = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    subject.paste((200, 30, 30, 255), (10, 10, 30, 30))
+    buf = BytesIO()
+    subject.save(buf, format="PNG")
+    gen_b64 = base64.b64encode(buf.getvalue()).decode()
+    schema_json = json.dumps(SCHEMA)
+
+    class _FakeResp:
+        status_code = 200
+
+        def __init__(self, body):
+            self._body = body
+
+        def json(self):
+            return self._body
+
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append((url, json))
+        if url.endswith("/chat/completions"):
+            return _FakeResp({"choices": [{"message": {"content": schema_json}}]})
+        return _FakeResp({"data": [{"b64_json": gen_b64}], "usage": {"cost": 0.04}})
+
+    import envfile
+    orig_env_path = envfile.DEFAULT_ENV_PATH
+    envfile.DEFAULT_ENV_PATH = Path(tempfile.mkdtemp()) / "absent.env"
+    orig_post = orclient.requests.post
+    orig_cut = post.cut_background
+    orclient.requests.post = fake_post
+    post.cut_background = lambda data: Image.open(BytesIO(data)).convert("RGBA")
+
+    _clear(); _env()
+    os.environ["SPRITEGEN_BASE_URL"] = "http://svc/v1"
+    try:
+        code = gen.main(["make", "-i", str(img), "--out-root", tmp])
+    finally:
+        orclient.requests.post = orig_post
+        post.cut_background = orig_cut
+        envfile.DEFAULT_ENV_PATH = orig_env_path
+        _clear()
+
+    assert code == 0
+    image_calls = [j for u, j in calls if u.endswith("/images")]
+    assert len(image_calls) == 1
+    posted_ref_url = image_calls[0]["input_references"][0]["image_url"]["url"]
+    assert posted_ref_url.endswith(base64.b64encode(ref_bytes).decode())
+    assert any(u == "http://svc/v1/images" for u, _ in calls)
 
 
 if __name__ == "__main__":

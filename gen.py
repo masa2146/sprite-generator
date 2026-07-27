@@ -5,6 +5,7 @@ Commands:
     pick <spec> N   lock candidate N as the pack's style bible
     build <spec>    generate every asset in the spec
     analyze <image> derive the style prefix (and style bible) from a reference image
+    make            pack-less one-shot: an image, a text, or both -> one sprite
 """
 
 from __future__ import annotations
@@ -115,6 +116,25 @@ def _missing_key(pack) -> bool:
         print(f"error: ${pack.key_env} is not set", file=sys.stderr)
         return True
     return False
+
+
+def _report_analysis_error(exc: "vision.AnalysisError", image_path: Path) -> int:
+    """The reply is the only evidence of what went wrong; keep it on disk
+    rather than making the user re-run and re-pay to see it again."""
+    if exc.raw:
+        dump = image_path.with_suffix(image_path.suffix + ".analysis-error.txt")
+        try:
+            dump.write_text(exc.raw, encoding="utf-8")
+            print(f"error: {exc} (raw reply written to {dump})", file=sys.stderr)
+        except Exception:
+            # Raw model text is not guaranteed ASCII (curly quotes, em-dashes),
+            # so a locale-encoding failure here (UnicodeEncodeError, not an
+            # OSError) must not swallow the analysis error the dump exists to
+            # record.
+            print(f"error: {exc}", file=sys.stderr)
+    else:
+        print(f"error: {exc}", file=sys.stderr)
+    return 1
 
 
 def _chunks(items, size):
@@ -386,22 +406,7 @@ def cmd_analyze(args):
     try:
         schema, _raw = vision.analyze(pack, image_bytes)
     except vision.AnalysisError as exc:
-        # The reply is the only evidence of what went wrong; keep it on disk
-        # rather than making the user re-run and re-pay to see it again.
-        if exc.raw:
-            dump = image_path.with_suffix(image_path.suffix + ".analysis-error.txt")
-            try:
-                dump.write_text(exc.raw, encoding="utf-8")
-                print(f"error: {exc} (raw reply written to {dump})", file=sys.stderr)
-            except Exception:
-                # Raw model text is not guaranteed ASCII (curly quotes, em-dashes),
-                # so a locale-encoding failure here (UnicodeEncodeError, not an
-                # OSError) must not swallow the analysis error the dump exists to
-                # record.
-                print(f"error: {exc}", file=sys.stderr)
-        else:
-            print(f"error: {exc}", file=sys.stderr)
-        return 1
+        return _report_analysis_error(exc, image_path)
     except orclient.ApiError as exc:
         print(f"error: vision request failed: {exc}", file=sys.stderr)
         return 1
@@ -424,13 +429,16 @@ def cmd_analyze(args):
         packwriter.update_pack(
             args.pack,
             prefix=prefix,
-            # Store only the subject, matching every other asset in the pack:
-            # the style prefix is applied at build time by full_prompt(), not
-            # frozen into the asset's own prompt. Embedding `repro` (subject +
-            # prefix) would double the style now and freeze a stale copy of it
-            # forever, silently drifting from the pack the moment the prefix
-            # changes.
-            new_asset=(args.add_asset, schema["subject"]) if args.add_asset else None,
+            # Store subject + form + detail (vision.subject_prompt), matching
+            # every other asset in the pack: the style prefix is applied at
+            # build time by full_prompt(), not frozen into the asset's own
+            # prompt. Embedding `repro` (subject + prefix) would double the
+            # style now and freeze a stale copy of it forever, silently
+            # drifting from the pack the moment the prefix changes. Subject
+            # alone, on the other hand, is too narrow to rebuild the object
+            # from — form and detail are what the schema grew those fields
+            # for, and this asset is exactly the "one object" they describe.
+            new_asset=(args.add_asset, vision.subject_prompt(schema)) if args.add_asset else None,
         )
     except packwriter.PackWriteError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -460,7 +468,7 @@ def slugify(text: str, limit: int = 40) -> str:
 
 
 def cmd_make(args):
-    if not args.image and not args.text:
+    if not args.image and not (args.text or "").strip():
         print("error: give an image (-i), a text (-t), or both", file=sys.stderr)
         return 1
 
@@ -474,6 +482,16 @@ def cmd_make(args):
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    if _missing_key(pack):
+        return 1
+
+    # Same check cmd_analyze does, against the vision key instead — only
+    # relevant here when an image is actually going to be analysed.
+    if args.image and pack.vision_key_env and pack.vision_api_key() is None:
+        print(f"error: ${pack.vision_key_env} is not set", file=sys.stderr)
+        return 1
+
+    image_path = None
     image_bytes = None
     if args.image:
         image_path = Path(args.image)
@@ -488,16 +506,7 @@ def cmd_make(args):
         try:
             schema, _raw = vision.analyze(pack, image_bytes, user_text=args.text)
         except vision.AnalysisError as exc:
-            if exc.raw:
-                dump = image_path.with_suffix(image_path.suffix + ".analysis-error.txt")
-                try:
-                    dump.write_text(exc.raw, encoding="utf-8")
-                    print(f"error: {exc} (raw reply written to {dump})", file=sys.stderr)
-                except Exception:
-                    print(f"error: {exc}", file=sys.stderr)
-            else:
-                print(f"error: {exc}", file=sys.stderr)
-            return 1
+            return _report_analysis_error(exc, image_path)
         except orclient.ApiError as exc:
             print(f"error: vision request failed: {exc}", file=sys.stderr)
             return 1
@@ -531,13 +540,16 @@ def cmd_make(args):
         print(f"error: cannot create {out_dir}: {exc}", file=sys.stderr)
         return 1
 
+    reference = str(image_path.resolve()) if image_path is not None else None
     stamp = time.strftime("%Y%m%d-%H%M%S")
     spent = 0.0
+    cost_seen = False  # True once any variant reports a real cost
     written = failed = 0
+    stopped_early = False
 
     for i in range(args.n):
-        if spent >= args.max_cost:
-            print(f"stopped: cost ceiling ${args.max_cost:.2f} reached")
+        if cost_seen and spent >= args.max_cost:
+            stopped_early = True
             break
         suffix = f"-{i}" if args.n > 1 else ""
         name = f"{stamp}-{slug}{suffix}"
@@ -546,7 +558,16 @@ def cmd_make(args):
                 pack, prompt, aspect_ratio=args.aspect_ratio,
                 reference_png=image_bytes, seed=i,
             )
-        except (orclient.ApiError, orclient.ImageMissing) as exc:
+        except orclient.ImageMissing as exc:
+            try:
+                (out_dir / f"{name}.error.json").write_text(json.dumps(exc.raw, indent=2))
+                note = f" (see {name}.error.json)"
+            except Exception as write_exc:
+                note = f" (also failed to write {name}.error.json: {write_exc})"
+            print(f"[{name}] failed — no image in response{note}", file=sys.stderr)
+            failed += 1
+            continue
+        except orclient.ApiError as exc:
             print(f"[{name}] failed — {exc}", file=sys.stderr)
             failed += 1
             continue
@@ -555,7 +576,11 @@ def cmd_make(args):
             failed += 1
             continue
 
+        # The image is paid for by this point. If post-processing fails, keep the
+        # raw file AND still write a sidecar — build_one's reasoning applies here
+        # too, and more so: the sidecar is the only provenance `make` has at all.
         target = out_dir / f"{name}.png"
+        post_error = None
         try:
             if args.no_cutout:
                 target.write_bytes(png)
@@ -564,22 +589,23 @@ def cmd_make(args):
                 img = post.trim_and_pad(img)
                 img.save(target)
         except Exception as exc:
-            raw_path = out_dir / f"{name}.raw.png"
             try:
-                raw_path.write_bytes(png)
-            except OSError:
-                pass
-            print(f"[{name}] post-processing failed — {exc} "
-                  f"(raw kept as {raw_path.name})", file=sys.stderr)
+                (out_dir / f"{name}.raw.png").write_bytes(png)
+                note = f" (raw kept as {name}.raw.png)"
+            except Exception as write_exc:
+                note = f" (also failed to keep raw png: {write_exc})"
+            post_error = f"post-processing: {exc}{note}"
+            print(f"[{name}] failed — {post_error}", file=sys.stderr)
             failed += 1
-            continue
 
         sidecar = {
+            "status": "failed" if post_error else "ok",
             "prompt": prompt, "schema": schema, "model": pack.model,
             "transport": pack.transport, "base_url": pack.base_url,
             "aspect_ratio": args.aspect_ratio, "seed": i, "cost": cost,
-            "user_text": args.text, "reference": str(args.image) if args.image else None,
-            "file": str(target),
+            "user_text": args.text, "reference": reference,
+            "file": str(target) if post_error is None else None,
+            "error": post_error,
         }
         try:
             (out_dir / f"{name}.json").write_text(
@@ -587,13 +613,22 @@ def cmd_make(args):
         except OSError as exc:
             print(f"[{name}] warning: sidecar not written: {exc}", file=sys.stderr)
 
-        print(f"[{name}] ok -> {target}")
-        written += 1
-        if cost:
+        if post_error is None:
+            print(f"[{name}] ok -> {target}")
+            written += 1
+        if cost is not None:
+            cost_seen = True
             spent += cost
 
-    print(f"\ndone: {written} written, {failed} failed  (${spent:.2f})")
-    return 0 if failed == 0 and written > 0 else 1
+    budget = f"(${spent:.2f})" if cost_seen else "(cost unknown — --max-cost not enforced)"
+    print(f"\ndone: {written} written, {failed} failed  {budget}")
+    if stopped_early:
+        print(f"stopped: cost ceiling ${args.max_cost:.2f} reached, "
+              f"{args.n - (written + failed)} variant(s) not requested")
+    # A truncated run (cost ceiling hit) means fewer variants exist than -n asked
+    # for, even if every variant that did run succeeded — a caller chaining
+    # `&& upload` must not treat that as a clean success (see cmd_build).
+    return 1 if (failed or stopped_early or written == 0) else 0
 
 
 def _add_endpoint_flags(sub):
@@ -660,7 +695,8 @@ def main(argv=None):
     make.add_argument("--no-cutout", action="store_true",
                       help="whole-image output: no backdrop, no alpha cut, no trim")
     make.add_argument("--dry-run", action="store_true",
-                      help="print the analysis and prompt, generate nothing")
+                      help="print the analysis and prompt, generate nothing "
+                           "(with -i, the vision call is still made and still costs)")
     make.add_argument("--max-cost", type=float, default=DEFAULT_MAX_COST,
                       help=f"USD ceiling (default {DEFAULT_MAX_COST})")
     _add_endpoint_flags(make)
