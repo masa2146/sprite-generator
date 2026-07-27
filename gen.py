@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
+import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -451,6 +453,149 @@ def cmd_analyze(args):
     return 0
 
 
+def slugify(text: str, limit: int = 40) -> str:
+    """A filesystem-safe fragment of `text` for the output filename."""
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:limit].strip("-")
+    return s or "sprite"
+
+
+def cmd_make(args):
+    if not args.image and not args.text:
+        print("error: give an image (-i), a text (-t), or both", file=sys.stderr)
+        return 1
+
+    try:
+        pack = config.env_pack(
+            base_url=args.base_url, model=args.model, transport=args.transport,
+            vision_base_url=args.vision_base_url, vision_model=args.vision_model,
+            out_root=Path(args.out_root),
+        )
+    except config.SpecError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    image_bytes = None
+    if args.image:
+        image_path = Path(args.image)
+        try:
+            image_bytes = image_path.read_bytes()
+        except OSError as exc:
+            print(f"error: cannot read {image_path}: {exc}", file=sys.stderr)
+            return 1
+
+    schema = None
+    if image_bytes is not None:
+        try:
+            schema, _raw = vision.analyze(pack, image_bytes, user_text=args.text)
+        except vision.AnalysisError as exc:
+            if exc.raw:
+                dump = image_path.with_suffix(image_path.suffix + ".analysis-error.txt")
+                try:
+                    dump.write_text(exc.raw, encoding="utf-8")
+                    print(f"error: {exc} (raw reply written to {dump})", file=sys.stderr)
+                except Exception:
+                    print(f"error: {exc}", file=sys.stderr)
+            else:
+                print(f"error: {exc}", file=sys.stderr)
+            return 1
+        except orclient.ApiError as exc:
+            print(f"error: vision request failed: {exc}", file=sys.stderr)
+            return 1
+        body = vision.object_prompt(schema)
+        slug = slugify(schema.get("subject") or args.text or "sprite")
+    else:
+        # Text only: nothing to analyse, so no vision call and no vision cost.
+        body = args.text.strip()
+        slug = slugify(args.text)
+
+    prompt = body if args.no_cutout else f"{body} {config.BG_CLAUSE}"
+
+    if schema is not None:
+        print("analysis:")
+        for field in vision.PROMPT_ORDER:
+            value = (schema.get(field) if field in vision.SUBJECT_FIELDS
+                     else (schema.get("style") or {}).get(field))
+            if value:
+                print(f"  {field:<9} {value}")
+        print()
+    print(f"prompt:\n{prompt}\n")
+
+    if args.dry_run:
+        print("dry run: nothing written")
+        return 0
+
+    out_dir = pack.out_dir
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f"error: cannot create {out_dir}: {exc}", file=sys.stderr)
+        return 1
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    spent = 0.0
+    written = failed = 0
+
+    for i in range(args.n):
+        if spent >= args.max_cost:
+            print(f"stopped: cost ceiling ${args.max_cost:.2f} reached")
+            break
+        suffix = f"-{i}" if args.n > 1 else ""
+        name = f"{stamp}-{slug}{suffix}"
+        try:
+            png, cost, _raw = orclient.generate(
+                pack, prompt, aspect_ratio=args.aspect_ratio,
+                reference_png=image_bytes, seed=i,
+            )
+        except (orclient.ApiError, orclient.ImageMissing) as exc:
+            print(f"[{name}] failed — {exc}", file=sys.stderr)
+            failed += 1
+            continue
+        except Exception as exc:
+            print(f"[{name}] failed — {type(exc).__name__}: {exc}", file=sys.stderr)
+            failed += 1
+            continue
+
+        target = out_dir / f"{name}.png"
+        try:
+            if args.no_cutout:
+                target.write_bytes(png)
+            else:
+                img = post.cut_background(png)
+                img = post.trim_and_pad(img)
+                img.save(target)
+        except Exception as exc:
+            raw_path = out_dir / f"{name}.raw.png"
+            try:
+                raw_path.write_bytes(png)
+            except OSError:
+                pass
+            print(f"[{name}] post-processing failed — {exc} "
+                  f"(raw kept as {raw_path.name})", file=sys.stderr)
+            failed += 1
+            continue
+
+        sidecar = {
+            "prompt": prompt, "schema": schema, "model": pack.model,
+            "transport": pack.transport, "base_url": pack.base_url,
+            "aspect_ratio": args.aspect_ratio, "seed": i, "cost": cost,
+            "user_text": args.text, "reference": str(args.image) if args.image else None,
+            "file": str(target),
+        }
+        try:
+            (out_dir / f"{name}.json").write_text(
+                json.dumps(sidecar, indent=2), encoding="utf-8")
+        except OSError as exc:
+            print(f"[{name}] warning: sidecar not written: {exc}", file=sys.stderr)
+
+        print(f"[{name}] ok -> {target}")
+        written += 1
+        if cost:
+            spent += cost
+
+    print(f"\ndone: {written} written, {failed} failed  (${spent:.2f})")
+    return 0 if failed == 0 and written > 0 else 1
+
+
 def _add_endpoint_flags(sub):
     sub.add_argument("--base-url", default=None, help="override [api] base_url")
     sub.add_argument("--model", default=None, help="override [pack] model")
@@ -504,6 +649,22 @@ def main(argv=None):
                          help="print the analysis, write nothing "
                               "(the vision call is still made and still costs)")
     analyze.set_defaults(func=cmd_analyze)
+
+    make = subs.add_parser(
+        "make", help="generate one sprite from an image, a text, or both")
+    make.add_argument("-i", "--image", default=None, help="reference image")
+    make.add_argument("-t", "--text", default=None,
+                      help="what to make; overrides the image where they conflict")
+    make.add_argument("-n", type=int, default=1, help="number of variants")
+    make.add_argument("--aspect-ratio", default="1:1")
+    make.add_argument("--no-cutout", action="store_true",
+                      help="whole-image output: no backdrop, no alpha cut, no trim")
+    make.add_argument("--dry-run", action="store_true",
+                      help="print the analysis and prompt, generate nothing")
+    make.add_argument("--max-cost", type=float, default=DEFAULT_MAX_COST,
+                      help=f"USD ceiling (default {DEFAULT_MAX_COST})")
+    _add_endpoint_flags(make)
+    make.set_defaults(func=cmd_make)
 
     args = parser.parse_args(argv)
     return args.func(args)
