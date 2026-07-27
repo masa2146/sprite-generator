@@ -56,11 +56,14 @@ def toml_string(value: str) -> str:
 _toml_string = toml_string      # existing internal callers
 
 
-def _prefix_literal(value: str) -> str:
+def prefix_literal(value: str) -> str:
     """Multi-line form when it is safe, quoted form when it is not."""
     if '"""' in value or "\\" in value:
-        return _toml_string(value)
+        return toml_string(value)
     return f'"""\n{value.strip()}\n"""'
+
+
+_prefix_literal = prefix_literal      # existing internal callers
 
 
 def _section_body_span(text: str, header: str, masked: str) -> tuple[int, int] | None:

@@ -8,6 +8,7 @@ makes the cost a separate, explicit decision.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -150,7 +151,7 @@ def pack_text(model: str, style: dict, objects, refs_dir, pack_path) -> str:
         f"model = {packwriter.toml_string(model)}",
         "",
         "[style]",
-        f'prefix = """\n{prefix}\n"""',
+        f"prefix = {packwriter.prefix_literal(prefix)}",
         'plate_prompt = "a representative object from this set"',
         "",
         "[defaults]",
@@ -159,10 +160,11 @@ def pack_text(model: str, style: dict, objects, refs_dir, pack_path) -> str:
     ]
 
     for obj in objects:
-        try:
-            rel = Path(obj["crop"]).relative_to(pack_path.parent)
-        except ValueError:
-            rel = Path(obj["crop"])          # outside the pack dir: keep it absolute
+        # Purely lexical (works whether or not the paths exist yet) and walks
+        # up with ".." where needed, so a reference stays relative even when
+        # refs_dir is not under the pack's directory — a pack and its refs
+        # must be movable together.
+        rel = Path(os.path.relpath(Path(obj["crop"]).resolve(), pack_path.parent.resolve()))
         for view in obj.get("views") or [vision.DEFAULT_VIEW]:
             # Built as a plain local first: a nested-quote f-string here is a
             # SyntaxError on Python 3.11 ("expression part cannot include a

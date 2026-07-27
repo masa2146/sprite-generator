@@ -162,6 +162,32 @@ def test_a_quote_in_a_description_does_not_break_the_toml():
     assert 'a "glossy" thing' in tomllib.loads(text)["assets"][0]["prompt"]
 
 
+def test_a_backslash_or_triple_quote_in_a_style_field_does_not_break_the_toml():
+    tmp = tempfile.mkdtemp()
+    style = {f: f"{f}-value" for f in
+             ("render", "camera", "lighting", "palette", "linework", "realism")}
+    style["camera"] = "50mm w\\ shallow DOF"
+    style["lighting"] = 'has \"\"\" inside'
+    kept, _ = extract.crop_objects(_img(), _objects(), Path(tmp) / "refs")
+    text = extract.pack_text("m/model", style, kept,
+                             Path(tmp) / "refs", Path(tmp) / "p.toml")
+    d = tomllib.loads(text)
+    assert "50mm w\\ shallow DOF" in d["style"]["prefix"]
+    assert 'has """ inside' in d["style"]["prefix"]
+
+
+def test_a_refs_dir_outside_the_pack_dir_still_gets_a_relative_reference():
+    tmp = Path(tempfile.mkdtemp())
+    pack_dir = tmp / "pack"
+    pack_dir.mkdir()
+    refs_dir = tmp / "refs"          # sibling of pack_dir, not inside it
+    kept, _ = extract.crop_objects(_img(), _objects(), refs_dir)
+    text = extract.pack_text("m/model", {}, kept, refs_dir, pack_dir / "p.toml")
+    ref = tomllib.loads(text)["assets"][0]["reference"]
+    assert not Path(ref).is_absolute()
+    assert ref.startswith("..")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
