@@ -45,6 +45,50 @@ Useful flags:
 | `--max-cost 2.00` | stop before exceeding this USD total (default 5.00) |
 | `--base-url` / `--model` / `--transport` | override the spec for one run |
 
+## One-shot: `make`
+
+No pack file. Give an image, a text, or both:
+
+```bash
+python3 gen.py make -i ref.png                      # reproduce what's in the image
+python3 gen.py make -i ref.png -t "make it red"     # the text overrides the image
+python3 gen.py make -t "a glossy blue button"       # text only
+python3 gen.py make -i ref.png -n 3                 # three variants
+```
+
+With an image, it is analysed into nine fields — `subject`, `form`, `detail`, plus the six
+style fields — and those become the prompt. Text given alongside an image **overrides it
+field by field**: where your words conflict with what the model sees, your words win;
+everything you did not mention comes from the image. The image is also sent to the
+generator as a reference, so it matches shape as well as description.
+
+Text alone makes no vision call at all — there is nothing to analyse and nothing to pay
+for.
+
+Output goes to `out/make/<timestamp>-<slug>.png` with a `.json` beside it recording the
+schema, the full prompt, the model, the seed and the cost — `make` has no pack file, so
+that sidecar is the only record of how a result was produced.
+
+`--dry-run` prints the analysis and prompt and generates nothing. `--no-cutout` skips the
+backdrop clause, the alpha cut and the trim, for full-bleed backgrounds and tiles.
+
+### Configuration
+
+`make` reads its endpoints from `.env` in the project root (copy `.env.example`). A real
+environment variable always wins over the file, so `export SPRITEGEN_MODEL=...` still
+overrides it for one run, and a CLI flag overrides both.
+
+Unlike pack files — which hold the *name* of an env var and are meant to be shared —
+`.env` holds real key values and is gitignored.
+
+### When to use which
+
+| goal | command |
+|---|---|
+| One object, quick iteration | `make` |
+| A consistent set of 30 assets | `build` with a pack |
+| Derive a pack's style from a reference | `analyze` |
+
 ## Transport: `images` vs `chat`
 
 Two HTTP transports talk to two different endpoints:
@@ -178,7 +222,7 @@ is not implemented.
 ## Tests
 
 ```bash
-python3 test_post.py && python3 test_config.py && python3 test_client.py && python3 test_build.py && python3 test_packwriter.py && python3 test_vision.py
+python3 test_post.py && python3 test_config.py && python3 test_client.py && python3 test_build.py && python3 test_packwriter.py && python3 test_vision.py && python3 test_env.py && python3 test_make.py
 ```
 
 No network, no rembg model download, runs in about a second.
