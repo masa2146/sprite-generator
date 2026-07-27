@@ -1,4 +1,4 @@
-"""Geometry tests for post.trim_and_pad. Run: python test_post.py"""
+"""Geometry tests for post.trim_and_pad. Run: python3 test_post.py"""
 from PIL import Image
 
 from post import trim_and_pad

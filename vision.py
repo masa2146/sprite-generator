@@ -94,7 +94,15 @@ def validate_schema(schema: dict) -> list[str]:
 
 
 def style_prefix(schema: dict) -> str:
-    """The pack's [style] prefix: style fields only, never the subject."""
+    """The pack's [style] prefix: style fields only, never the subject.
+
+    ponytail: nothing here structurally stops a model from writing the
+    subject into a style field anyway (e.g. "render": "soft 3D render of a
+    gold coin") — the prompt forbids it and the field split enforces the
+    *shape*, not the *content*. Detecting that is out of scope for this pass;
+    upgrade path would be a subject-vs-style overlap check (e.g. flag a style
+    field that shares n-grams with `subject`) if drift like that shows up.
+    """
     style = schema.get("style", {})
     return ", ".join(style[f].strip() for f in _JOIN_ORDER if style.get(f))
 
@@ -107,9 +115,11 @@ def reproduction_prompt(schema: dict) -> str:
 def analyze(pack, image_bytes: bytes, retries: int = 3, sleeper=None) -> tuple[dict, str]:
     """Send the image to the vision endpoint. Returns (schema, raw_reply_text)."""
     if not pack.vision_model:
+        # Deliberately only two suggestions: load_pack never consults [pack]
+        # model for vision, so telling the user to set it would "fix" analyze
+        # by pointing build at a vision model that can't generate images.
         raise AnalysisError(
-            "no vision model: set [vision] model, pass --vision-model, "
-            "or set [pack] model to a vision-capable model"
+            "no vision model: set [vision] model, or pass --vision-model"
         )
 
     mime = orclient._sniff_mime(image_bytes)

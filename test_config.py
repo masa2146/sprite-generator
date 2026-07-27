@@ -1,4 +1,4 @@
-"""Spec parsing and precedence tests. Run: python test_config.py"""
+"""Spec parsing and precedence tests. Run: python3 test_config.py"""
 import os
 import tempfile
 from pathlib import Path
@@ -61,7 +61,11 @@ def _write(text, name="hc_v1.toml"):
 
 
 def _clear_env():
-    for k in ("SPRITEGEN_BASE_URL", "SPRITEGEN_MODEL", "SPEC_KEY", "OPENROUTER_API_KEY"):
+    # OMNIROUTE_API_KEY is the [vision] key_env the README tells users to
+    # export; a test that fails only for users who followed the README is
+    # worse than no test.
+    for k in ("SPRITEGEN_BASE_URL", "SPRITEGEN_MODEL", "SPEC_KEY", "OPENROUTER_API_KEY",
+              "OMNIROUTE_API_KEY"):
         os.environ.pop(k, None)
 
 

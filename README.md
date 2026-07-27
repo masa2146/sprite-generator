@@ -94,7 +94,10 @@ Sends the image to a vision model and extracts six style fields — render,
 camera, lighting, palette, linework, realism — plus what the image depicts.
 The style fields become the pack's `[style] prefix`; the image is copied to
 `out/<pack>/style_bible.png`; with `--add-asset <id>` the detected subject is
-appended as a new asset. `--dry-run` prints everything and writes nothing.
+appended as a new asset. `--dry-run` prints everything and writes nothing —
+unlike `build --dry-run`, it still makes (and pays for) the vision call; the
+flag only skips the pack write and the style-bible copy, since there is no way
+to know what to print without asking the vision model first.
 `analyze` also accepts the same endpoint override flags as the other
 subcommands — `--base-url`, `--model`, `--transport`, `--vision-base-url`,
 `--vision-model`, `--out-root`.
