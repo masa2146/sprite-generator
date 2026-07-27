@@ -345,8 +345,12 @@ OBJECTS_REPLY = {
     },
     "objects": [
         {
+            # "isometric" is not in vision.VIEW_POOL — a rogue view name a
+            # model might return despite the prompt's closed list. Important 5:
+            # nothing proved normalise_views was actually wired into
+            # analyze_objects (deleting that loop left all 269 tests green).
             "id": "bunny_white", "bbox": [45, 1000, 165, 1125],
-            "animated": True, "views": ["front", "side"],
+            "animated": True, "views": ["front", "isometric", "side"],
             "subject": "a plump white rabbit token",
             "form": "a round ball body with two upright ears",
             "detail": "tiny dot eyes, pink nose",
@@ -375,6 +379,22 @@ def test_analyze_objects_sends_the_object_prompt_and_the_image():
     content = body["messages"][0]["content"]
     assert vision.OBJECT_ANALYSIS_PROMPT in content[0]["text"]
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_analyze_objects_normalises_views_against_the_pool():
+    """Important 5: analyze_objects must actually run every object's "views"
+    through normalise_views, not just parse them as-is. OBJECTS_REPLY's
+    bunny_white carries a rogue "isometric" view the model returned despite
+    the prompt's closed list — a schema that reached extract._asset_prompt
+    with that name would silently fall back to VIEW_POOL[DEFAULT_VIEW] there
+    (extract.py's .get with a default), producing an asset named
+    "bunny_white-isometric" whose prompt actually says "front"."""
+    (schema, _), rec = _run_objects([_Resp(200, _body(json.dumps(OBJECTS_REPLY)))])
+    for obj in schema["objects"]:
+        for v in obj["views"]:
+            assert v in vision.VIEW_POOL, obj
+    bunny = next(o for o in schema["objects"] if o["id"] == "bunny_white")
+    assert bunny["views"] == ["front", "side"]   # "isometric" dropped, pool order kept
 
 
 def test_analyze_objects_rejects_a_reply_with_no_objects():

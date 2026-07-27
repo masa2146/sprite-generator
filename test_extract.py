@@ -89,6 +89,45 @@ def test_an_object_without_an_id_is_rejected_not_crashed():
     assert len(rejected) == 1
 
 
+def test_a_duplicate_id_is_rejected_and_the_first_crop_survives():
+    """Critical 3: two objects sharing an id used to overwrite each other's
+    crop on disk and produce an unloadable pack (config.load_pack rejects
+    duplicate asset ids). The second occurrence must be rejected, and the
+    first object's crop (its real dimensions) must be left untouched."""
+    d = Path(tempfile.mkdtemp())
+    objs = [
+        {"id": "block", "bbox": [10, 10, 110, 110], "animated": False, "views": ["front"]},
+        {"id": "block", "bbox": [200, 300, 260, 380], "animated": False, "views": ["front"]},
+    ]
+    kept, rejected = extract.crop_objects(_img(), objs, d)
+    assert [o["id"] for o in kept] == ["block"]
+    assert rejected == [("block", "duplicate id")]
+    with Image.open(d / "block.png") as im:
+        assert im.size == (100, 100)   # the first box's dims, not the second's (60, 80)
+
+
+def test_an_id_that_would_escape_the_refs_dir_is_rejected():
+    """Important 4: the model's id becomes a path (refs_dir / f"{id}.png") and,
+    downstream, an asset id used the same way in gen.py's out_dir. An id like
+    "../escaped" must be rejected before it ever reaches Path(), not silently
+    written outside refs_dir."""
+    d = Path(tempfile.mkdtemp())
+    objs = [{"id": "../escaped", "bbox": [10, 10, 110, 110], "animated": False,
+             "views": ["front"]}]
+    kept, rejected = extract.crop_objects(_img(), objs, d)
+    assert kept == []
+    assert rejected == [("../escaped", "unusable id")]
+    assert not (d.parent / "escaped.png").exists()
+
+
+def test_an_id_with_a_slash_is_rejected():
+    d = Path(tempfile.mkdtemp())
+    objs = [{"id": "a/b", "bbox": [10, 10, 110, 110], "animated": False, "views": ["front"]}]
+    kept, rejected = extract.crop_objects(_img(), objs, d)
+    assert kept == []
+    assert rejected == [("a/b", "unusable id")]
+
+
 # --- contact sheet ----------------------------------------------------------
 
 def test_labelled_sheet_is_written_and_readable():
@@ -112,7 +151,7 @@ def _pack_text(tmp):
     style = {f: f"{f}-value" for f in
              ("render", "camera", "lighting", "palette", "linework", "realism")}
     kept, _ = extract.crop_objects(_img(), _objects(), Path(tmp) / "refs")
-    return extract.pack_text("m/model", style, kept,
+    return extract.pack_text("m/model", "SPRITEGEN_API_KEY", style, kept,
                              Path(tmp) / "refs", Path(tmp) / "p.toml")
 
 
@@ -121,6 +160,45 @@ def test_pack_text_parses_as_toml():
     d = tomllib.loads(_pack_text(tmp))
     assert d["pack"]["model"] == "m/model"
     assert "render-value" in d["style"]["prefix"]
+
+
+def test_pack_text_writes_the_key_env():
+    """Critical 2: a pack from `extract` must record which env var holds the
+    key, or `build` falls back to load_pack's OPENROUTER_API_KEY default and
+    fails for a user who followed .env.example and set SPRITEGEN_API_KEY."""
+    tmp = tempfile.mkdtemp()
+    assert tomllib.loads(_pack_text(tmp))["api"]["key_env"] == "SPRITEGEN_API_KEY"
+
+
+def test_pack_text_round_trips_an_empty_key_env():
+    """An endpoint that needs no key must round-trip as key_env = "", not be
+    dropped (which would silently fall back to the OPENROUTER_API_KEY default)."""
+    tmp = tempfile.mkdtemp()
+    style = {f: f"{f}-value" for f in
+             ("render", "camera", "lighting", "palette", "linework", "realism")}
+    kept, _ = extract.crop_objects(_img(), _objects(), Path(tmp) / "refs")
+    text = extract.pack_text("m/model", "", style, kept,
+                             Path(tmp) / "refs", Path(tmp) / "p.toml")
+    d = tomllib.loads(text)
+    assert "key_env" in d["api"]
+    assert d["api"]["key_env"] == ""
+
+
+def test_pack_text_joins_the_style_prefix_in_visions_join_order():
+    """Important 6: pack_text used to reimplement vision.style_prefix with
+    STYLE_FIELDS order instead of vision._JOIN_ORDER (palette deliberately
+    last), so a pack from `extract` and one from `analyze` carried
+    differently-ordered prefixes for the same schema."""
+    tmp = tempfile.mkdtemp()
+    style = {f: f"{f}-value" for f in
+             ("render", "camera", "lighting", "palette", "linework", "realism")}
+    kept, _ = extract.crop_objects(_img(), _objects(), Path(tmp) / "refs")
+    text = extract.pack_text("m/model", "SPRITEGEN_API_KEY", style, kept,
+                             Path(tmp) / "refs", Path(tmp) / "p.toml")
+    prefix = tomllib.loads(text)["style"]["prefix"]
+    import vision
+    assert prefix.strip() == vision.style_prefix({"style": style})
+    assert prefix.index("palette-value") > prefix.index("realism-value")
 
 
 def test_one_asset_per_object_view():
@@ -150,6 +228,13 @@ def test_no_style_field_leaks_into_an_asset_prompt():
         assert "render-value" not in a["prompt"]
 
 
+def test_an_object_with_no_subject_fields_does_not_start_the_prompt_with_a_comma():
+    """Minor 7: an object missing subject/form/detail must not produce a prompt
+    like ", seen from directly the front" — the leading ", " meant the sprite
+    would generate from style + view alone."""
+    assert extract._asset_prompt({"id": "x"}, "front") == "seen from directly the front"
+
+
 def test_a_quote_in_a_description_does_not_break_the_toml():
     tmp = tempfile.mkdtemp()
     style = {f: f"{f}-value" for f in
@@ -157,7 +242,7 @@ def test_a_quote_in_a_description_does_not_break_the_toml():
     objs = _objects()
     objs[0]["subject"] = 'a "glossy" thing with a \\ in it'
     kept, _ = extract.crop_objects(_img(), objs, Path(tmp) / "refs")
-    text = extract.pack_text("m/model", style, kept,
+    text = extract.pack_text("m/model", "SPRITEGEN_API_KEY", style, kept,
                              Path(tmp) / "refs", Path(tmp) / "p.toml")
     assert 'a "glossy" thing' in tomllib.loads(text)["assets"][0]["prompt"]
 
@@ -169,7 +254,7 @@ def test_a_backslash_or_triple_quote_in_a_style_field_does_not_break_the_toml():
     style["camera"] = "50mm w\\ shallow DOF"
     style["lighting"] = 'has \"\"\" inside'
     kept, _ = extract.crop_objects(_img(), _objects(), Path(tmp) / "refs")
-    text = extract.pack_text("m/model", style, kept,
+    text = extract.pack_text("m/model", "SPRITEGEN_API_KEY", style, kept,
                              Path(tmp) / "refs", Path(tmp) / "p.toml")
     d = tomllib.loads(text)
     assert "50mm w\\ shallow DOF" in d["style"]["prefix"]
@@ -182,7 +267,7 @@ def test_a_refs_dir_outside_the_pack_dir_still_gets_a_relative_reference():
     pack_dir.mkdir()
     refs_dir = tmp / "refs"          # sibling of pack_dir, not inside it
     kept, _ = extract.crop_objects(_img(), _objects(), refs_dir)
-    text = extract.pack_text("m/model", {}, kept, refs_dir, pack_dir / "p.toml")
+    text = extract.pack_text("m/model", "SPRITEGEN_API_KEY", {}, kept, refs_dir, pack_dir / "p.toml")
     ref = tomllib.loads(text)["assets"][0]["reference"]
     assert not Path(ref).is_absolute()
     assert ref.startswith("..")
@@ -359,6 +444,75 @@ def test_extract_missing_image_exits_cleanly():
         assert stub.calls == 0
     finally:
         _env_clear()
+
+
+# --- the extract -> build seam ----------------------------------------------
+#
+# Required new test (final review): both criticals live in the extract -> build
+# handoff and nothing else crosses it. Critical 1: build's style_bible gate
+# used to fire unconditionally, even though every asset extract writes carries
+# its own `reference` and never needs one. Critical 2: the pack extract writes
+# used to omit [api] key_env, so build fell back to load_pack's
+# OPENROUTER_API_KEY default instead of the SPRITEGEN_API_KEY extract itself
+# authenticated with.
+
+import config
+
+
+def test_extract_then_build_reaches_generation_without_a_style_bible():
+    tmp = tempfile.mkdtemp()
+    _env_ready()
+    had_or_key = "OPENROUTER_API_KEY" in os.environ
+    prior_or_key = os.environ.pop("OPENROUTER_API_KEY", None)
+    try:
+        pack = Path(tmp) / "packs" / "bunny.toml"
+        with _VisionStub():
+            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                             "--no-open"])
+        assert code == 0
+
+        out_root = Path(tmp) / "out"
+        loaded = config.load_pack(pack, out_root=out_root)
+        assert loaded.key_env == "SPRITEGEN_API_KEY"   # Critical 2: recorded, not dropped
+        assert not loaded.style_bible.exists()          # extract never wrote one
+
+        seed_to_id = {loaded.seed_for(a.id): a.id for a in loaded.assets}
+        calls = {}
+
+        def fake_generate(pack_, prompt, aspect_ratio=None, reference_png=None,
+                          seed=None, **kw):
+            calls[seed_to_id[seed]] = reference_png
+            return b"\x89PNG\r\n\x1a\nFAKE", 0.01, {"stub": True}
+
+        class _FakeImg:
+            def __init__(self, data):
+                self.data = data
+
+            def save(self, path):
+                Path(path).write_bytes(self.data)
+
+        original = (gen.orclient.generate, gen.post.cut_background, gen.post.trim_and_pad)
+        gen.orclient.generate = fake_generate
+        gen.post.cut_background = lambda data: _FakeImg(data)
+        gen.post.trim_and_pad = lambda img, **kw: img
+        try:
+            code = gen.main(["build", str(pack), "--out-root", str(out_root)])
+        finally:
+            gen.orclient.generate, gen.post.cut_background, gen.post.trim_and_pad = original
+
+        assert code == 0    # Critical 1: build reached generation, no style bible required
+        assert not loaded.style_bible.exists()   # still never created
+
+        # Critical 1 + 2 pinned together: every asset's reference_png is its own
+        # crop's bytes, not a style bible (there is none) and not None.
+        assert set(calls) == {a.id for a in loaded.assets}
+        for a in loaded.assets:
+            assert a.reference is not None
+            assert calls[a.id] == a.reference.read_bytes()
+    finally:
+        _env_clear()
+        if had_or_key:
+            os.environ["OPENROUTER_API_KEY"] = prior_or_key
 
 
 if __name__ == "__main__":
