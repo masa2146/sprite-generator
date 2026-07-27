@@ -19,13 +19,28 @@ class PackWriteError(Exception):
 
 
 # A section header at the start of a line: [style], [[assets]], ...
-# Must have matching brackets to avoid matching [ inside multi-line string values.
-_SECTION = re.compile(r"^\[+[A-Za-z0-9_.\-\"' ]+\]+[ \t]*$", re.M)
+_SECTION = re.compile(r"^\[\[?[A-Za-z0-9_.\-\"' ]+\]?\][ \t]*$", re.M)
 # prefix = "..." or prefix = """...""" (multi-line), captured as one value.
 _PREFIX = re.compile(
     r'^([ \t]*prefix[ \t]*=[ \t]*)("""(?:.|\n)*?"""|"(?:[^"\\]|\\.)*")',
     re.M,
 )
+
+
+def _mask_multiline_strings(text: str) -> str:
+    """Blank out the contents of triple-quoted strings, preserving length and
+    newlines, so a header regex cannot match a line inside a string value.
+
+    No regex over raw text can distinguish `[foo]` as a section header from the
+    same characters inside a prefix value — so the values are removed from
+    consideration before the search rather than the pattern being tightened.
+    """
+    chars = list(text)
+    for match in re.finditer(r'"""(?:.|\n)*?"""', text):
+        for i in range(match.start() + 3, match.end() - 3):
+            if chars[i] != "\n":
+                chars[i] = "x"
+    return "".join(chars)
 
 
 def _toml_string(value: str) -> str:
@@ -51,7 +66,8 @@ def _section_body_span(text: str, header: str) -> tuple[int, int] | None:
     if not match:
         return None
     start = match.end()
-    nxt = _SECTION.search(text, start)
+    masked = _mask_multiline_strings(text)
+    nxt = _SECTION.search(masked, start)
     return start, (nxt.start() if nxt else len(text))
 
 
@@ -64,7 +80,8 @@ def _set_style_prefix(text: str, prefix: str) -> str:
         # table order matters, and a [style] table after [[assets]] would be
         # parsed as belonging to the last asset.
         block = f"[style]\nprefix = {literal}\n\n"
-        first_asset = re.search(r"^\[\[assets\]\]", text, re.M)
+        masked = _mask_multiline_strings(text)
+        first_asset = re.search(r"^\[\[assets\]\]", masked, re.M)
         if first_asset:
             return text[: first_asset.start()] + block + text[first_asset.start() :]
         return text.rstrip("\n") + "\n\n" + block

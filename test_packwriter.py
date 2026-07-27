@@ -37,6 +37,11 @@ prompt = "seamless pastel sky gradient"
 cutout = false
 '''
 
+BRACKET_PACK = PACK.replace(
+    'prefix = """\nold prefix line one,\nold prefix line two\n"""',
+    'prefix = """\nold prefix line one,\n[not a real section]\nold prefix line two\n"""',
+)
+
 
 def _pack_file(text=PACK):
     d = Path(tempfile.mkdtemp())
@@ -207,8 +212,18 @@ def test_pack_write_failure_restores_file():
     assert p.read_text() == original
 
 
-def test_prefix_with_bracket_line_works():
-    """A prefix containing a line starting with [ should not confuse section parsing."""
+def test_existing_prefix_containing_a_bracket_line_is_replaced_cleanly():
+    """When existing prefix contains [bracket], replace it without creating duplicate prefix keys."""
+    p = _pack_file(BRACKET_PACK)
+    update_pack(p, prefix="new prefix text")
+    d = _load(p)
+    assert d["style"]["prefix"].strip() == "new prefix text"
+    assert [a["id"] for a in d["assets"]] == ["btn_play", "bg_sky"]
+    assert p.read_text().count("prefix =") == 1     # not two prefix keys
+
+
+def test_new_prefix_with_bracket_line_works():
+    """A new prefix containing a line starting with [ should round-trip correctly."""
     p = _pack_file()
     tricky_prefix = "line one\n[this looks like a section but is not]\nline three"
     update_pack(p, prefix=tricky_prefix)
