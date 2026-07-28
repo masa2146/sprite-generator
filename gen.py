@@ -644,6 +644,30 @@ def cmd_make(args):
     return 1 if (failed or stopped_early or written == 0) else 0
 
 
+def _write_export(pack_path: Path, out_root: Path) -> Path | None:
+    """Write the pack's HTML input sheet, or warn and return None.
+
+    Loading the pack we just wrote is the point of doing it here rather than
+    from the in-memory objects: it proves the file `build` will read is
+    actually loadable, right after the vision call was paid for, instead of
+    failing later when the user runs build.
+    """
+    try:
+        written = config.load_pack(pack_path, out_root=out_root)
+        html_path = pack_path.with_suffix(".html")
+        html_path.write_text(
+            export.page(written, written.assets,
+                        f"{pack_path.stem} — inputs sent to the image model"),
+            encoding="utf-8",
+        )
+        return html_path
+    except (config.SpecError, OSError) as exc:
+        # Same rule as the contact sheet: a review aid must not cost the user
+        # the crops and pack they already paid for.
+        print(f"warning: input sheet not written: {exc}", file=sys.stderr)
+        return None
+
+
 def cmd_export(args):
     """Write one HTML file carrying each asset's reference image and wire prompt.
 
@@ -777,9 +801,13 @@ def cmd_extract(args):
         print(f"error: cannot write {pack_path}: {exc}", file=sys.stderr)
         return 1
 
+    html_path = _write_export(pack_path, Path(args.out_root))
+
     total = sum(len(o.get("views") or [1]) for o in kept)
     print(f"\n{len(kept)} objects, {total} assets -> {pack_path}")
     print(f"crops -> {refs_dir}")
+    if html_path:
+        print(f"prompts -> {html_path}")
     if sheet and not args.no_open:
         webbrowser.open(Path(sheet).resolve().as_uri())
     print(f"\nreview the sheet, prune the pack, then:\n"

@@ -169,6 +169,10 @@ reference = "refs/coin.png"      # relative to the pack file; falls back to the 
 
 ## Taking the same input to another model: `export`
 
+**`extract` writes this file for you.** Every pack it creates gets a matching `.html`
+beside it, so the merged prompts are never a step you have to remember. `export` is for
+packs you wrote or pruned by hand, and for re-making the file after editing one.
+
 `export` writes one self-contained HTML file holding, per asset, the reference image that
 goes to the image model and the exact prompt text that goes with it:
 

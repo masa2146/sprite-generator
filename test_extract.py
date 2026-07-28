@@ -634,6 +634,39 @@ def test_extract_without_text_passes_none():
         _env_clear()
 
 
+def test_extract_also_writes_the_html_input_sheet():
+    """Every pack ships with the merged prompts beside it: that file is what
+    gets pasted into another model, and building it by hand after each run is
+    the step that gets skipped."""
+    tmp = tempfile.mkdtemp(); _env_ready()
+    try:
+        pack = Path(tmp) / "out.toml"
+        with _VisionStub():
+            assert gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                             "--no-open"]) == 0
+        html = pack.with_suffix(".html")
+        assert html.exists()
+        body = html.read_text()
+        ids = [a["id"] for a in tomllib.loads(pack.read_text())["assets"]]
+        for asset_id in ids:
+            assert asset_id in body
+        assert "data:image/" in body          # references inlined, not linked
+    finally:
+        _env_clear()
+
+
+def test_a_dry_run_writes_no_html_sheet():
+    tmp = tempfile.mkdtemp(); _env_ready()
+    try:
+        pack = Path(tmp) / "out.toml"
+        with _VisionStub():
+            assert gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                             "--no-open", "--dry-run"]) == 0
+        assert not pack.with_suffix(".html").exists()
+    finally:
+        _env_clear()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
