@@ -286,11 +286,20 @@ git commit -m "feat: load and validate a screenshot analysis"
 
 **Files:**
 - Modify: `brief.py` (append)
+- Modify: `extract.py:221-228` (split `_exclusion_clause`; see Step 3a)
 - Test: `test_brief.py` (append)
 
 **Interfaces:**
 - Consumes: `vision.VIEW_POOL`, `vision.DEFAULT_VIEW`, `extract.MAX_NAMED_CONTENTS` (int, `4`).
-- Produces: `asset_prompt(obj: dict, view: str, style: str, contents=None) -> str`, where `contents` is the list of object ids whose boxes sit inside this object's box (the value from `extract.find_contents`).
+- Produces:
+  - `extract.exclusion_names(ids) -> list[str]` — humanised, capped, summarised names for the ids a box swallows. Public because two callers now format the same list into different sentences.
+  - `asset_prompt(obj: dict, view: str, style: str, contents=None) -> str`, where `contents` is the list of object ids whose boxes sit inside this object's box (the value from `extract.find_contents`).
+
+**Ruling on a plan conflict (decided before execution):** the Global Constraint
+"never duplicate `extract.py` logic" governs over an earlier draft of this task
+that reimplemented `extract._exclusion_clause`'s capping and pluralisation. The
+naming logic becomes a shared public helper; each caller keeps its own sentence.
+`_exclusion_clause` stays as a thin wrapper so `test_extract.py` needs no edits.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -411,7 +420,36 @@ Expected: `AttributeError: module 'brief' has no attribute 'asset_prompt'`
 
 - [ ] **Step 3: Write the implementation**
 
-Add `import extract` to the imports at the top of `brief.py`, beside `import vision`, then append:
+**Step 3a — split the shared helper in `extract.py`.** Replace `_exclusion_clause`
+(currently `extract.py:221-228`) with these two functions. `_exclusion_clause` keeps
+its exact output, so `test_extract.py` needs no changes:
+
+```python
+def exclusion_names(ids) -> list[str]:
+    """Humanised names for the ids a box swallows, capped and summarised.
+
+    Public because two callers format this same list into different sentences:
+    extract's own paragraph prompt and brief.py's DO NOT DRAW list. Capping and
+    pluralisation living in one place is the point — this pluralisation has been
+    wrong once already.
+    """
+    named = [i.replace("_", " ") for i in ids[:MAX_NAMED_CONTENTS]]
+    rest = len(ids) - MAX_NAMED_CONTENTS
+    if rest > 0:
+        named.append(f"and {rest} other element" + ("s" if rest > 1 else ""))
+    return named
+
+
+def _exclusion_clause(ids) -> str:
+    """Tell the generator what to leave out of a crop that shows too much."""
+    return ("drawn on its own, without the " + ", ".join(exclusion_names(ids))
+            + " visible inside it in the reference image")
+```
+
+Then run `python3 test_extract.py` and confirm it still passes unchanged.
+
+**Step 3b — the prompt itself.** Add `import extract` to the imports at the top of
+`brief.py`, beside `import vision`, then append:
 
 ```python
 _REFERENCES = """REFERENCES
@@ -451,13 +489,10 @@ def _field_block(obj: dict, view: str) -> str:
 def _do_not_draw(contents) -> str:
     lines = ["DO NOT DRAW"]
     if contents:
-        named = [c.replace("_", " ") for c in contents[: extract.MAX_NAMED_CONTENTS]]
-        rest = len(contents) - extract.MAX_NAMED_CONTENTS
-        if rest > 0:
-            named.append(f"and {rest} other element" + ("s" if rest > 1 else ""))
-        lines.append(
-            "- the " + ", ".join(named) + " visible inside it in the reference image"
-        )
+        # Naming, capping and pluralisation come from extract so the two
+        # callers cannot drift apart.
+        lines.append("- the " + ", ".join(extract.exclusion_names(contents))
+                     + " visible inside it in the reference image")
     lines.append(_FIXED_BANS)
     return "\n".join(lines)
 
