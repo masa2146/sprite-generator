@@ -145,7 +145,14 @@ def style_prefix(schema: dict) -> str:
     field that shares n-grams with `subject`) if drift like that shows up.
     """
     style = schema.get("style", {})
-    return ", ".join(style[f].strip() for f in _JOIN_ORDER if style.get(f))
+    # isinstance, not truthiness: analyze_objects does not run validate_schema,
+    # so a model answering "palette" with a list of hex codes reaches here. That
+    # must degrade to a shorter prefix, not crash a command that has already
+    # paid for the vision call and written crops to disk.
+    return ", ".join(
+        style[f].strip() for f in _JOIN_ORDER
+        if isinstance(style.get(f), str) and style[f].strip()
+    )
 
 
 def reproduction_prompt(schema: dict) -> str:

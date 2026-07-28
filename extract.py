@@ -52,16 +52,15 @@ def reject_reason(bbox, img_w: int, img_h: int) -> str | None:
     return None
 
 
-def crop_objects(image: Image.Image, objects, refs_dir) -> tuple[list[dict], list]:
-    """Crop each object to refs_dir. Returns (kept, rejected).
+def screen_objects(objects, img_w: int, img_h: int) -> tuple[list[dict], list]:
+    """Decide which objects are usable. Returns (accepted, rejected).
 
-    Each kept object gains a "crop" key holding its Path. Each rejected entry
-    is (object_id, reason). A crop that cannot be written rejects that object
-    rather than aborting — the other objects are still worth having.
+    Every check that does not need the image itself lives here so `--dry-run`
+    previews exactly the set the real run keeps. Screening in two places let
+    the preview and the run disagree, and the preview is what the user reads
+    before paying `build`.
     """
-    refs_dir = Path(refs_dir)
-    refs_dir.mkdir(parents=True, exist_ok=True)
-    kept: list[dict] = []
+    accepted: list[dict] = []
     rejected: list[tuple[str, str]] = []
     seen: set[str] = set()
 
@@ -76,16 +75,37 @@ def crop_objects(image: Image.Image, objects, refs_dir) -> tuple[list[dict], lis
         if not _ID_RE.fullmatch(obj_id):
             rejected.append((obj_id, "unusable id"))
             continue
-        if obj_id in seen:
+        # Case-folded: "Block" and "block" are two asset ids but one filename on
+        # a case-insensitive filesystem, so the second crop would overwrite the
+        # first and the contact sheet would show it twice under two labels.
+        if obj_id.lower() in seen:
             rejected.append((obj_id, "duplicate id"))
             continue
-        seen.add(obj_id)
+        seen.add(obj_id.lower())
 
-        reason = reject_reason(obj.get("bbox"), image.width, image.height)
+        reason = reject_reason(obj.get("bbox"), img_w, img_h)
         if reason:
             rejected.append((obj_id, reason))
             continue
+        accepted.append(obj)
 
+    return accepted, rejected
+
+
+def crop_objects(image: Image.Image, objects, refs_dir) -> tuple[list[dict], list]:
+    """Crop each usable object to refs_dir. Returns (kept, rejected).
+
+    Each kept object gains a "crop" key holding its Path. Each rejected entry
+    is (object_id, reason). A crop that cannot be written rejects that object
+    rather than aborting — the other objects are still worth having.
+    """
+    refs_dir = Path(refs_dir)
+    refs_dir.mkdir(parents=True, exist_ok=True)
+    accepted, rejected = screen_objects(objects, image.width, image.height)
+    kept: list[dict] = []
+
+    for obj in accepted:
+        obj_id = obj["id"]
         x1, y1, x2, y2 = (int(v) for v in obj["bbox"])
         target = refs_dir / f"{obj_id}.png"
         try:

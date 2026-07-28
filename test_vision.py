@@ -426,6 +426,18 @@ def _run_objects(responses, pack=None):
         orclient.requests.post = original
 
 
+def test_style_prefix_skips_a_non_string_field_instead_of_crashing():
+    """analyze_objects does not run validate_schema, so a model answering
+    "palette" with a list of hex codes reaches style_prefix. It must degrade to
+    a shorter prefix, not crash a command that already paid for the call."""
+    schema = {"style": dict(SCHEMA["style"], palette=["#2E2A4D", "#6C4CD6"])}
+    prefix = vision.style_prefix(schema)
+    assert "#2E2A4D" not in prefix
+    for field in vision.STYLE_FIELDS:
+        if field != "palette":
+            assert SCHEMA["style"][field] in prefix
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

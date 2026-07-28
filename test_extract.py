@@ -1,4 +1,6 @@
 """extract mechanics tests. Run: python3 test_extract.py"""
+import contextlib
+import io
 import tempfile
 import tomllib
 from pathlib import Path
@@ -513,6 +515,56 @@ def test_extract_then_build_reaches_generation_without_a_style_bible():
         _env_clear()
         if had_or_key:
             os.environ["OPENROUTER_API_KEY"] = prior_or_key
+
+
+def test_ids_differing_only_in_case_are_rejected_as_duplicates():
+    """A case-insensitive filesystem maps both to one crop file, so the second
+    would silently overwrite the first and the sheet would show it twice."""
+    objs = [
+        {"id": "Block", "bbox": [10, 10, 110, 110], "views": ["front"]},
+        {"id": "block", "bbox": [200, 300, 260, 380], "views": ["front"]},
+    ]
+    with tempfile.TemporaryDirectory() as td:
+        refs = Path(td) / "refs"
+        kept, rejected = extract.crop_objects(_img(), objs, refs)
+    assert [k["id"] for k in kept] == ["Block"]
+    assert rejected == [("block", "duplicate id")]
+
+
+def test_the_dry_run_preview_names_the_same_objects_the_real_run_keeps():
+    """The preview is what the user reads before paying build, so it must not
+    promise an object extract would drop. Goes through the real command: a
+    dry-run that screened differently from the run would pass any test that
+    only compared the two helpers to each other."""
+    reply = json.loads(json.dumps(OBJECTS_REPLY))
+    reply["objects"] = [
+        dict(reply["objects"][0], id="good"),
+        dict(reply["objects"][0], id="Good"),        # collides on a case-insensitive fs
+        dict(reply["objects"][0], id="../escaped"),  # would write outside refs/
+    ]
+    tmp = tempfile.mkdtemp(); _env_ready()
+    try:
+        pack = Path(tmp) / "out.toml"
+        buf = io.StringIO()
+        with _VisionStub(reply=reply), contextlib.redirect_stdout(buf):
+            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                             "--no-open", "--dry-run"])
+        assert code == 0
+        preview = buf.getvalue()
+
+        with _VisionStub(reply=reply):
+            assert gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                             "--no-open"]) == 0
+        built = {a["id"].rsplit("-", 1)[0] for a in tomllib.loads(pack.read_text())["assets"]}
+        assert built == {"good"}
+
+        for line in preview.splitlines():
+            if line.startswith("  ") and "REJECT" not in line:
+                assert line.split()[0] in built, f"preview promised {line.split()[0]!r}"
+        assert "REJECT (duplicate id)" in preview
+        assert "REJECT (unusable id)" in preview
+    finally:
+        _env_clear()
 
 
 if __name__ == "__main__":

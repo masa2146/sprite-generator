@@ -696,11 +696,14 @@ def cmd_extract(args):
 
     if args.dry_run:
         print(f"style: {', '.join(schema['style'].get(f, '') for f in vision.STYLE_FIELDS)}\n")
-        for obj in objects:
-            reason = extract.reject_reason(obj.get("bbox"), image.width, image.height)
+        # Screen exactly as the real run does, so the preview cannot promise an
+        # object that extract would then drop.
+        accepted, rejected = extract.screen_objects(objects, image.width, image.height)
+        for obj in accepted:
             state = "ANIMATED" if obj.get("animated") else "static"
-            mark = f"REJECT ({reason})" if reason else ",".join(obj.get("views") or [])
-            print(f"  {obj.get('id', '?'):<20} {state:<9} {mark}")
+            print(f"  {obj['id']:<20} {state:<9} {','.join(obj.get('views') or [])}")
+        for obj_id, reason in rejected:
+            print(f"  {obj_id:<20} {'—':<9} REJECT ({reason})")
         print(f"\ndry run: nothing written (would write {pack_path} and {refs_dir})")
         return 0
 
