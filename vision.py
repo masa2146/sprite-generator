@@ -253,6 +253,16 @@ Rules:
   need. For anything not animated list exactly one.
 - Reply with JSON only, no commentary."""
 
+OBJECT_USER_CLAUSE = """
+
+The user, who knows this game, describes the image as: {text}
+
+Treat that description as ground truth about what exists and where. Every object
+the user names must appear in "objects" at the position they describe, even if
+you would otherwise have missed it, merged it into a neighbour, or read it as
+part of the background. Keep finding the objects the user did not mention too —
+their description adds to your list, it does not replace it."""
+
 
 def normalise_views(views, animated: bool) -> list[str]:
     """Reduce a model's view list to known names, in pool order.
@@ -267,12 +277,17 @@ def normalise_views(views, animated: bool) -> list[str]:
     return ordered or [DEFAULT_VIEW]
 
 
-def analyze_objects(pack, image_bytes: bytes, retries: int = 3,
-                    sleeper=None) -> tuple[dict, str]:
+def analyze_objects(pack, image_bytes: bytes, user_text: str | None = None,
+                    retries: int = 3, sleeper=None) -> tuple[dict, str]:
     """Ask the vision model for every sprite in the image.
 
     Returns ({"style": {...}, "objects": [...]}, raw_reply_text). Views are
     normalised here so callers never see a name outside the pool.
+
+    user_text, when given, is the user's own description of the scene. It is
+    appended as ground truth rather than merged programmatically: deciding
+    whether "the dispenser below the white blocks" is a new object or one the
+    model already found is the model's job, not a string comparison's.
     """
     if not pack.vision_model:
         raise AnalysisError(
@@ -280,15 +295,20 @@ def analyze_objects(pack, image_bytes: bytes, retries: int = 3,
             "or set SPRITEGEN_VISION_MODEL"
         )
 
+    instruction = OBJECT_ANALYSIS_PROMPT
+    if user_text and user_text.strip():
+        instruction += OBJECT_USER_CLAUSE.format(text=user_text.strip())
+
     mime = orclient._sniff_mime(image_bytes)
     b64 = base64.b64encode(image_bytes).decode()
     payload = {
         "model": pack.vision_model,
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": OBJECT_ANALYSIS_PROMPT},
+            {"type": "text", "text": instruction},
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
         ]}],
         "stream": False,
+        "temperature": 0,
     }
     headers = {"Content-Type": "application/json"}
     key = pack.vision_api_key()
@@ -347,6 +367,7 @@ def analyze(pack, image_bytes: bytes, user_text: str | None = None,
         # proxy: a local omniroute/litellm returns an SSE stream by default,
         # which post_with_retry then reports as "200 response was not JSON".
         "stream": False,
+        "temperature": 0,
     }
     headers = {"Content-Type": "application/json"}
     key = pack.vision_api_key()

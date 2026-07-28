@@ -303,6 +303,7 @@ class _VisionStub:
         self.reply = reply if reply is not None else OBJECTS_REPLY
         self.error = error
         self.calls = 0
+        self.user_text = None
 
     def __enter__(self):
         self._orig = gen.vision.analyze_objects
@@ -310,8 +311,9 @@ class _VisionStub:
         self._env = envfile.DEFAULT_ENV_PATH
         envfile.DEFAULT_ENV_PATH = Path(tempfile.mkdtemp()) / "absent.env"
 
-        def fake(pack, image_bytes, **kw):
+        def fake(pack, image_bytes, user_text=None, **kw):
             self.calls += 1
+            self.user_text = user_text
             if self.error:
                 raise self.error
             return self.reply, json.dumps(self.reply)
@@ -603,6 +605,33 @@ def test_one_huge_crop_does_not_blow_up_the_contact_sheet():
     with Image.open(sheet) as im:
         assert im.width <= 2 * (extract._CELL + 32)
         assert im.height <= extract._CELL + 64
+
+
+def test_extract_passes_the_user_s_description_to_the_vision_call():
+    """The user knows the game; --text is what makes the model find the
+    dispenser it would otherwise read as background."""
+    tmp = tempfile.mkdtemp(); _env_ready()
+    try:
+        pack = Path(tmp) / "out.toml"
+        with _VisionStub() as stub:
+            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                             "--no-open", "-t", "there is a conveyor in the middle"])
+        assert code == 0
+        assert stub.user_text == "there is a conveyor in the middle"
+    finally:
+        _env_clear()
+
+
+def test_extract_without_text_passes_none():
+    tmp = tempfile.mkdtemp(); _env_ready()
+    try:
+        pack = Path(tmp) / "out.toml"
+        with _VisionStub() as stub:
+            assert gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+                             "--no-open"]) == 0
+        assert stub.user_text is None
+    finally:
+        _env_clear()
 
 
 if __name__ == "__main__":

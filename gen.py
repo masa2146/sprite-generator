@@ -7,6 +7,7 @@ Commands:
     analyze <image> derive the style prefix (and style bible) from a reference image
     make            pack-less one-shot: an image, a text, or both -> one sprite
     extract         find every sprite in an image and write a buildable pack
+    export <spec>   write an HTML file of each asset's reference and prompt
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from pathlib import Path
 from PIL import Image
 
 import config
+import export
 import extract
 import orclient
 import packwriter
@@ -642,6 +644,45 @@ def cmd_make(args):
     return 1 if (failed or stopped_early or written == 0) else 0
 
 
+def cmd_export(args):
+    """Write one HTML file carrying each asset's reference image and wire prompt.
+
+    Generates nothing and costs nothing — it only restates what `build` would
+    send, so the same input can be tried against another model by hand.
+    """
+    try:
+        pack = config.load_pack(
+            args.spec, base_url=args.base_url, model=args.model,
+            transport=args.transport, out_root=Path(args.out_root),
+        )
+    except config.SpecError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    targets = select_assets(pack.assets, args.only)
+    if not targets:
+        print("error: no assets selected", file=sys.stderr)
+        return 1
+
+    spec_path = Path(args.spec)
+    out_path = Path(args.out) if args.out else spec_path.with_suffix(".html")
+    title = f"{spec_path.stem} — inputs sent to the image model"
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(export.page(pack, targets, title), encoding="utf-8")
+    except OSError as exc:
+        print(f"error: cannot write {out_path}: {exc}", file=sys.stderr)
+        return 1
+
+    missing = [a.id for a in targets
+               if not ((a.reference or pack.style_bible).exists())]
+    if missing:
+        print(f"warning: {len(missing)} asset(s) have no reference image on disk: "
+              f"{', '.join(missing)}", file=sys.stderr)
+    print(f"{len(targets)} assets -> {out_path}")
+    return 0
+
+
 def cmd_extract(args):
     pack_path = Path(args.pack)
     if pack_path.exists():
@@ -673,7 +714,7 @@ def cmd_extract(args):
         return 1
 
     try:
-        schema, _raw = vision.analyze_objects(pack, image_bytes)
+        schema, _raw = vision.analyze_objects(pack, image_bytes, args.text)
     except vision.AnalysisError as exc:
         return _report_analysis_error(exc, image_path)
     except orclient.ApiError as exc:
@@ -821,6 +862,9 @@ def main(argv=None):
         "extract", help="find every sprite in an image and write a buildable pack")
     extract_p.add_argument("-i", "--image", required=True, help="source image")
     extract_p.add_argument("--pack", required=True, help="pack file to create")
+    extract_p.add_argument("-t", "--text", default=None,
+                           help="your own description of the scene; treated as "
+                                "ground truth about what exists and where")
     extract_p.add_argument("--refs-dir", default=None,
                            help="where crops go (default: refs/ beside the pack)")
     extract_p.add_argument("--max-objects", type=int,
@@ -833,6 +877,17 @@ def main(argv=None):
                                 "made and still costs)")
     _add_endpoint_flags(extract_p)
     extract_p.set_defaults(func=cmd_extract)
+
+    export_p = subs.add_parser(
+        "export", help="write an HTML file of each asset's reference and prompt")
+    export_p.add_argument("spec", help="pack file")
+    export_p.add_argument("-o", "--out", default=None,
+                          help="output HTML file (default: the pack's name, .html)")
+    export_p.add_argument("--only", default=None,
+                          help="comma-separated asset ids, as in build")
+    _add_endpoint_flags(export_p)
+    export_p.set_defaults(func=cmd_export)
+
 
     args = parser.parse_args(argv)
     return args.func(args)

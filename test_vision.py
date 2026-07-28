@@ -438,6 +438,38 @@ def test_style_prefix_skips_a_non_string_field_instead_of_crashing():
             assert SCHEMA["style"][field] in prefix
 
 
+def test_user_text_is_appended_as_ground_truth_for_objects():
+    """The user knows the game; a described object must reach the model as
+    something it has to find, not as an optional hint."""
+    import orclient
+    rec = _Recorder([_Resp(200, _body(json.dumps(OBJECTS_REPLY)))])
+    original = orclient.requests.post
+    orclient.requests.post = rec
+    try:
+        vision.analyze_objects(_pack(), PNG, "there is a conveyor in the middle",
+                               sleeper=lambda s: None)
+    finally:
+        orclient.requests.post = original
+    sent = rec.calls[0]["json"]["messages"][0]["content"][0]["text"]
+    assert vision.OBJECT_ANALYSIS_PROMPT in sent
+    assert "there is a conveyor in the middle" in sent
+
+
+def test_no_user_text_leaves_the_object_prompt_alone():
+    (_schema, _raw), rec = _run_objects([_Resp(200, _body(json.dumps(OBJECTS_REPLY)))])
+    sent = rec.calls[0]["json"]["messages"][0]["content"][0]["text"]
+    assert sent == vision.OBJECT_ANALYSIS_PROMPT
+
+
+def test_vision_calls_pin_the_temperature():
+    """Same screenshot, same object list. Without this the provider default
+    (often 1.0) redrew every bounding box on each run."""
+    (_schema, _raw), rec = _run_objects([_Resp(200, _body(json.dumps(OBJECTS_REPLY)))])
+    assert rec.calls[0]["json"]["temperature"] == 0
+    (_s2, _r2), rec2 = _run_analyze([_Resp(200, _body(json.dumps(SCHEMA)))])
+    assert rec2.calls[0]["json"]["temperature"] == 0
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

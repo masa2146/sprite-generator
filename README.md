@@ -106,6 +106,29 @@ closed — `front`, `three_quarter`, `side`, `back`, `top_down` — so file name
 predictable and the same command twice gives the same set. Assets are named
 `<object>-<view>`.
 
+### Telling it what is in the picture
+
+`-t/--text` takes your own description of the scene and hands it to the vision model as
+ground truth about what exists and where:
+
+```bash
+python3 gen.py extract -i screen.png --pack packs/bunny.toml \
+  -t "there is a conveyor in the middle; below the white blocks at its lower left is a
+      dispenser, with a rounded-square object inside it"
+```
+
+Objects you name must appear in the list at the position you gave, even ones the model
+would have merged into a neighbour or read as background. Your description **adds to** its
+list rather than replacing it, so it keeps finding what you did not mention.
+
+Measured on a real screenshot: unguided, the conveyor came out as one box around the whole
+playfield and the dispenser was missed entirely. Guided, both appeared, plus the object
+inside the dispenser — and two consecutive runs returned identical ids, boxes and views.
+
+Vision calls pin `temperature: 0`, so the same image gives the same object list twice.
+Bounding boxes still come from a model, so they are not guaranteed stable across *model*
+versions — only across runs.
+
 ### When a crop is wrong
 
 Bounding boxes are the weak point of this flow. Three things make a bad one survivable:
@@ -121,6 +144,7 @@ Bounding boxes are the weak point of this flow. Three things make a bad one surv
 
 | flag | effect |
 |---|---|
+| `-t TEXT`, `--text TEXT` | your description of the scene, treated as ground truth |
 | `--refs-dir DIR` | where crops go (default: `refs/` beside the pack) |
 | `--max-objects N` | cap (default 12); the rest are reported, not silently dropped |
 | `--no-open` | do not open the contact sheet |
@@ -143,6 +167,24 @@ prompt    = "gold coin icon, thick rim, seen from directly the front"
 reference = "refs/coin.png"      # relative to the pack file; falls back to the style bible
 ```
 
+## Taking the same input to another model: `export`
+
+`export` writes one self-contained HTML file holding, per asset, the reference image that
+goes to the image model and the exact prompt text that goes with it:
+
+```bash
+python3 gen.py export packs/bunny.toml -o bunny_inputs.html
+```
+
+It generates nothing and costs nothing — it only restates what `build` would send, so you
+can paste the same input into Gemini or ChatGPT and compare their output against ours on
+identical input. The prompt shown is the *wire* prompt, transport included: under `chat`
+the aspect ratio is appended to the text, under `images` it is a separate field and the
+page says so. Images are inlined as data URIs, so the file works after being moved or
+mailed on its own.
+
+`--only` takes the same comma-separated asset ids as `build`.
+
 ## Configuration
 
 `make` reads its endpoints from `.env` in the project root (copy `.env.example`). A real
@@ -160,6 +202,7 @@ Unlike pack files — which hold the *name* of an env var and are meant to be sh
 | Multiple objects from a screenshot | `extract` |
 | A consistent set of 30 assets | `build` with a pack |
 | Derive a pack's style from a reference | `analyze` |
+| Try the same input on another model | `export` |
 
 ## Transport: `images` vs `chat`
 
@@ -294,7 +337,7 @@ is not implemented.
 ## Tests
 
 ```bash
-python3 test_post.py && python3 test_config.py && python3 test_client.py && python3 test_build.py && python3 test_packwriter.py && python3 test_vision.py && python3 test_env.py && python3 test_make.py && python3 test_extract.py
+python3 test_post.py && python3 test_config.py && python3 test_client.py && python3 test_build.py && python3 test_packwriter.py && python3 test_vision.py && python3 test_env.py && python3 test_make.py && python3 test_extract.py && python3 test_export.py
 ```
 
 No network, no rembg model download, runs in about a second.
