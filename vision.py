@@ -224,11 +224,33 @@ OBJECT_ANALYSIS_PROMPT = """List every distinct sprite in this image and describ
 
 Rules:
 - "style" describes the whole image once; it must not name any object.
-- One entry per distinct sprite. Do not list the background or the whole screen.
-- "bbox" is in pixels, top-left origin, [left, top, right, bottom].
-- "animated" is true only for things that move in the game (characters, pickups).
+- One entry per distinct sprite SHAPE, not per copy on screen. If several
+  objects are the same shape in different colours, or the same shape repeated
+  in the same pose, return ONE entry and name the colour variants in "detail".
+  Return separate entries only when the silhouette, construction or pose
+  genuinely differs. When a shape repeats, "bbox" must enclose ONE
+  representative copy — the clearest, least occluded one — never all the
+  copies together.
+- A box must contain its own object and nothing else that is on this list. If a
+  large structure frames the playfield, box the smallest repeating piece of it
+  (one straight run, one corner) rather than the whole frame: that piece is
+  what the game tiles.
+- Include the playfield's built parts, not only the obvious characters: tracks,
+  rails, conveyors, launchers, dispensers, slots, containers, platforms. These
+  get missed because they are large, low-contrast against the background, or
+  partly covered by other objects. Look for them deliberately.
+- List gameplay objects first and interface elements (score labels, coin
+  counters, settings buttons) last.
+- Do not list the background or the whole screen.
+- "bbox" is in pixels, top-left origin, [left, top, right, bottom]. It must
+  contain the object's FULL extent — every ear, spike, handle and overhang —
+  plus a few pixels of margin. A box that clips the object is a failure; a box
+  with some extra background around it is fine.
+- "animated" is true for anything that moves, rotates, is launched or is
+  carried during play. A fixed wall, rail or backdrop panel is not animated.
 - "views" may only contain: front, three_quarter, side, back, top_down.
-  Use one view for anything not animated.
+  For an animated object list at least three views the game would actually
+  need. For anything not animated list exactly one.
 - Reply with JSON only, no commentary."""
 
 

@@ -66,11 +66,12 @@ def test_crop_objects_writes_one_file_per_object():
     assert kept[0]["crop"] == d / "alpha.png"
 
 
-def test_crop_dimensions_match_the_box():
+def test_crop_dimensions_match_the_padded_box():
     d = Path(tempfile.mkdtemp())
     kept, _ = extract.crop_objects(_img(), _objects(), d)
+    x1, y1, x2, y2 = extract.padded_box(_objects()[0]["bbox"], 400, 600)
     with Image.open(kept[0]["crop"]) as im:
-        assert im.size == (100, 100)
+        assert im.size == (x2 - x1, y2 - y1)
 
 
 def test_a_rejected_box_is_reported_and_skipped():
@@ -104,8 +105,11 @@ def test_a_duplicate_id_is_rejected_and_the_first_crop_survives():
     kept, rejected = extract.crop_objects(_img(), objs, d)
     assert [o["id"] for o in kept] == ["block"]
     assert rejected == [("block", "duplicate id")]
+    x1, y1, x2, y2 = extract.padded_box([10, 10, 110, 110], 400, 600)
     with Image.open(d / "block.png") as im:
-        assert im.size == (100, 100)   # the first box's dims, not the second's (60, 80)
+        # the first box's padded dims, not the second box's
+        assert im.size == (x2 - x1, y2 - y1)
+        assert im.size != (60, 80)
 
 
 def test_an_id_that_would_escape_the_refs_dir_is_rejected():
@@ -565,6 +569,40 @@ def test_the_dry_run_preview_names_the_same_objects_the_real_run_keeps():
         assert "REJECT (unusable id)" in preview
     finally:
         _env_clear()
+
+
+def test_the_crop_is_padded_beyond_the_model_s_box():
+    """Vision boxes clip: the first live run cut the ears off every rabbit.
+    Extra background is free, a clipped silhouette is not."""
+    assert extract.padded_box([100, 100, 200, 300], 704, 1526) == (88, 76, 212, 324)
+
+
+def test_padding_is_clamped_to_the_image():
+    assert extract.padded_box([0, 0, 100, 100], 704, 1526) == (0, 0, 112, 112)
+    assert extract.padded_box([604, 1426, 704, 1526], 704, 1526) == (592, 1414, 704, 1526)
+
+
+def test_crop_objects_writes_the_padded_region():
+    objs = [{"id": "alpha", "bbox": [100, 100, 200, 300], "views": ["front"]}]
+    with tempfile.TemporaryDirectory() as td:
+        kept, _ = extract.crop_objects(_img(400, 600), objs, Path(td) / "refs")
+        assert Image.open(kept[0]["crop"]).size == (124, 248)   # not the raw 100x200
+
+
+def test_one_huge_crop_does_not_blow_up_the_contact_sheet():
+    """A near-full-playfield box (the live run produced 704x1004) used to size
+    every cell, giving a sheet of thousands of pixels of empty space."""
+    d = Path(tempfile.mkdtemp())
+    objs = [
+        {"id": "small", "bbox": [10, 10, 60, 60], "animated": False, "views": ["front"]},
+        {"id": "huge", "bbox": [0, 0, 380, 520], "animated": False, "views": ["front"]},
+    ]
+    kept, rejected = extract.crop_objects(_img(400, 600), objs, d)
+    assert rejected == [] and len(kept) == 2
+    sheet = extract.labelled_sheet(kept, d / "sheet.png")
+    with Image.open(sheet) as im:
+        assert im.width <= 2 * (extract._CELL + 32)
+        assert im.height <= extract._CELL + 64
 
 
 if __name__ == "__main__":

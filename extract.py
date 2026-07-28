@@ -20,9 +20,15 @@ import vision
 MIN_EDGE = 16              # smaller than this cannot be a usable sprite
 MAX_AREA_RATIO = 0.9       # a box this big means the model returned the whole screen
 DEFAULT_MAX_OBJECTS = 12
+# Vision models undershoot boxes: the first live run clipped the ears off every
+# rabbit. The crop is a reference for the generator, not the deliverable, so a
+# margin of background costs nothing while a clipped silhouette teaches the
+# generator the wrong shape.
+BOX_PAD = 0.12             # grow each accepted box by this fraction of its size
 
 _LABEL_H = 22              # strip under each cell for its caption
 _PAD = 8
+_CELL = 220                # longest edge of a crop as drawn on the sheet
 
 # The model's id becomes a filename (refs_dir / f"{id}.png") and, in gen.py, an
 # asset id used the same way — untrusted, so it must not contain "/" or "..".
@@ -92,6 +98,15 @@ def screen_objects(objects, img_w: int, img_h: int) -> tuple[list[dict], list]:
     return accepted, rejected
 
 
+def padded_box(bbox, img_w: int, img_h: int) -> tuple[int, int, int, int]:
+    """A validated box grown by BOX_PAD on every side, clamped to the image."""
+    x1, y1, x2, y2 = (int(v) for v in bbox)
+    dx = round((x2 - x1) * BOX_PAD)
+    dy = round((y2 - y1) * BOX_PAD)
+    return (max(0, x1 - dx), max(0, y1 - dy),
+            min(img_w, x2 + dx), min(img_h, y2 + dy))
+
+
 def crop_objects(image: Image.Image, objects, refs_dir) -> tuple[list[dict], list]:
     """Crop each usable object to refs_dir. Returns (kept, rejected).
 
@@ -106,7 +121,7 @@ def crop_objects(image: Image.Image, objects, refs_dir) -> tuple[list[dict], lis
 
     for obj in accepted:
         obj_id = obj["id"]
-        x1, y1, x2, y2 = (int(v) for v in obj["bbox"])
+        x1, y1, x2, y2 = padded_box(obj["bbox"], image.width, image.height)
         target = refs_dir / f"{obj_id}.png"
         try:
             image.crop((x1, y1, x2, y2)).save(target)
@@ -133,6 +148,11 @@ def labelled_sheet(entries, out_path) -> Path:
 
     images = [Image.open(e["crop"]).convert("RGB") for e in entries]
     try:
+        # Thumbnail first: cells size to the largest crop, and one full-playfield
+        # box (the live run produced a 704x1004 one) otherwise blows the sheet up
+        # to thousands of pixels of mostly empty space.
+        for im in images:
+            im.thumbnail((_CELL, _CELL))
         cell_w = max(im.width for im in images) + _PAD * 2
         cell_h = max(im.height for im in images) + _PAD * 2 + _LABEL_H
         cols = min(4, len(images))
