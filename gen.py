@@ -801,6 +801,14 @@ def cmd_extract(args):
         print(f"error: cannot write {pack_path}: {exc}", file=sys.stderr)
         return 1
 
+    contents = extract.find_contents(kept)
+    for obj_id, inside in contents.items():
+        # The crop for a framing object shows what it frames. Say so: the user
+        # decides whether to keep the reference or let the prompt carry it.
+        print(f"note: {obj_id}'s box also contains {len(inside)} other object(s) "
+              f"({', '.join(inside)}) — its crop shows them too, and its prompt "
+              f"now asks for it without them", file=sys.stderr)
+
     html_path = _write_export(pack_path, Path(args.out_root))
 
     total = sum(len(o.get("views") or [1]) for o in kept)

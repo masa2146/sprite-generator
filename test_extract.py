@@ -667,6 +667,63 @@ def test_a_dry_run_writes_no_html_sheet():
         _env_clear()
 
 
+# --- containment ------------------------------------------------------------
+
+def _boxed(**kw):
+    return [{"id": k, "bbox": v} for k, v in kw.items()]
+
+
+def test_a_framing_box_reports_what_it_swallows():
+    """A conveyor loop, a tray, a panel: its box contains what it frames, so
+    its crop shows the contents too."""
+    objs = _boxed(frame=[0, 0, 300, 300], brick=[50, 50, 90, 90], bunny=[100, 100, 140, 140])
+    assert extract.find_contents(objs) == {"frame": ["brick", "bunny"]}
+
+
+def test_a_neighbouring_box_is_not_contained():
+    objs = _boxed(left=[0, 0, 100, 100], right=[120, 0, 220, 100])
+    assert extract.find_contents(objs) == {}
+
+
+def test_a_box_overlapping_only_at_its_edge_is_not_contained():
+    """Model boxes clip their neighbours by a few pixels routinely; that must
+    not read as containment."""
+    objs = _boxed(big=[0, 0, 200, 200], edge=[190, 190, 290, 290])
+    assert extract.find_contents(objs) == {}
+
+
+def test_equal_boxes_do_not_contain_each_other():
+    objs = _boxed(a=[0, 0, 100, 100], b=[0, 0, 100, 100])
+    assert extract.find_contents(objs) == {}
+
+
+def test_the_prompt_asks_for_the_object_without_its_contents():
+    objs = _boxed(frame=[0, 0, 300, 300], brick_cluster=[50, 50, 90, 90])
+    objs[0].update(subject="a looping conveyor track", views=["front"], animated=False)
+    objs[1].update(subject="a brick", views=["front"], animated=False)
+    with tempfile.TemporaryDirectory() as td:
+        kept, _ = extract.crop_objects(_img(400, 600), objs, Path(td) / "refs")
+        text = extract.pack_text("m/m", "K", {"render": "r"}, kept,
+                                 Path(td) / "refs", Path(td) / "p.toml")
+    assets = {a["id"]: a["prompt"] for a in tomllib.loads(text)["assets"]}
+    assert "without the brick cluster" in assets["frame-front"]
+    assert "reference image" in assets["frame-front"]
+    assert "without the" not in assets["brick_cluster-front"]
+
+
+def test_a_long_content_list_is_summarised_not_dumped():
+    ids = {f"thing_{i}": [10 * i, 10 * i, 10 * i + 20, 10 * i + 20] for i in range(1, 9)}
+    objs = _boxed(frame=[0, 0, 300, 300], **ids)
+    inside = extract.find_contents(objs)["frame"]
+    assert len(inside) == 8
+    clause = extract._exclusion_clause(inside)
+    named = [i for i in ids if i.replace("_", " ") in clause]
+    assert len(named) == extract.MAX_NAMED_CONTENTS
+    assert "and 4 other elements" in clause
+    one_over = extract._exclusion_clause([f"thing_{i}" for i in range(5)])
+    assert "and 1 other element" in one_over and "1 other elements" not in one_over
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
