@@ -214,6 +214,61 @@ def test_missing_subject_fields_do_not_break_the_block():
     assert vision.VIEW_POOL["front"] in text
 
 
+# --- the HTML brief ---------------------------------------------------------
+
+def _png(path, size=(20, 20), colour=(200, 30, 30)):
+    from PIL import Image
+    Image.new("RGB", size, colour).save(path)
+    return Path(path)
+
+
+def test_the_page_inlines_both_images():
+    """The file has to survive being moved or mailed; refs/ does not travel
+    with it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        crop = _png(Path(tmp) / "alpha.png")
+        style = _png(Path(tmp) / "_style.png", size=(40, 40))
+        html_text = brief.page(
+            [{"id": "alpha-front", "crop": crop, "prompt": "P"}], style, "t")
+    assert html_text.count("data:image/png;base64,") == 2
+    assert "alpha.png" in html_text          # named so the upload is findable
+    assert "_style.png" in html_text
+
+
+def test_each_asset_gets_its_own_section_and_prompt():
+    with tempfile.TemporaryDirectory() as tmp:
+        crop = _png(Path(tmp) / "alpha.png")
+        style = _png(Path(tmp) / "_style.png")
+        entries = [{"id": "alpha-front", "crop": crop, "prompt": "PROMPT ONE"},
+                   {"id": "alpha-side", "crop": crop, "prompt": "PROMPT TWO"}]
+        html_text = brief.page(entries, style, "t")
+    assert html_text.count("class='asset'") == 2
+    assert "PROMPT ONE" in html_text and "PROMPT TWO" in html_text
+    assert "alpha-front" in html_text and "alpha-side" in html_text
+
+
+def test_the_page_escapes_prompt_text_and_ids():
+    with tempfile.TemporaryDirectory() as tmp:
+        crop = _png(Path(tmp) / "alpha.png")
+        style = _png(Path(tmp) / "_style.png")
+        html_text = brief.page(
+            [{"id": "a<b>", "crop": crop, "prompt": "draw a <script> & thing"}],
+            style, "t<i>")
+    assert "<script>" not in html_text
+    assert "&lt;script&gt;" in html_text
+    assert "a&lt;b&gt;" in html_text
+
+
+def test_the_page_references_no_external_file():
+    with tempfile.TemporaryDirectory() as tmp:
+        crop = _png(Path(tmp) / "alpha.png")
+        style = _png(Path(tmp) / "_style.png")
+        html_text = brief.page(
+            [{"id": "alpha-front", "crop": crop, "prompt": "P"}], style, "t")
+    assert "http://" not in html_text and "https://" not in html_text
+    assert "<link" not in html_text and "<script" not in html_text
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

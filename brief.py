@@ -13,6 +13,8 @@ their text, and a frame whose crop showed everything it framed.
 
 from __future__ import annotations
 
+import base64
+import html
 import json
 from pathlib import Path
 
@@ -147,3 +149,59 @@ def asset_prompt(obj: dict, view: str, style: str, contents=None) -> str:
         output,
         _do_not_draw(contents),
     ])
+
+
+_CSS = """
+body { font: 15px/1.55 -apple-system, Segoe UI, sans-serif; margin: 0 auto;
+       max-width: 62rem; padding: 2rem 1.25rem; background: #16161c; color: #e8e8ef; }
+h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+.meta { color: #9a9ab0; font-size: .85rem; margin-bottom: 2rem; }
+.asset { border-top: 1px solid #2c2c3a; padding: 1.5rem 0; }
+.asset h2 { font-size: 1.05rem; margin: 0 0 .75rem; font-family: ui-monospace, monospace; }
+.row { display: flex; gap: 1.25rem; flex-wrap: wrap; margin-bottom: .85rem; }
+figure { margin: 0; }
+figcaption { color: #9a9ab0; font-size: .75rem; margin-top: .3rem; }
+img { max-width: 190px; max-height: 190px; background: #22222c; border-radius: 6px; }
+pre { margin: 0; padding: .85rem; background: #1e1e28; border-radius: 6px;
+      white-space: pre-wrap; word-break: break-word;
+      font: 13px/1.5 ui-monospace, monospace; }
+"""
+
+
+def _data_uri(path: Path) -> str:
+    """Crops and the style copy are always PNG here because this module writes
+    them, so the type is known and needs no sniffing."""
+    return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode()
+
+
+def page(entries, style_image: Path, title: str) -> str:
+    """The whole brief as one self-contained HTML document.
+
+    Both images are inlined and both are named, because the workflow is: read
+    the prompt here, then upload those two files from refs/.
+    """
+    style_image = Path(style_image)
+    style_uri = _data_uri(style_image)
+    out = [
+        "<!doctype html><html><head><meta charset='utf-8'>",
+        f"<title>{html.escape(title)}</title><style>{_CSS}</style></head><body>",
+        f"<h1>{html.escape(title)}</h1>",
+        f"<p class='meta'>{len(entries)} prompts · upload BOTH images with every "
+        "message · one message per sprite</p>",
+    ]
+    for entry in entries:
+        crop = Path(entry["crop"])
+        out += [
+            "<div class='asset'>",
+            f"<h2>{html.escape(entry['id'])}</h2>",
+            "<div class='row'>",
+            f"<figure><img src='{_data_uri(crop)}' alt=''>"
+            f"<figcaption>Image 1 — {html.escape(crop.name)}</figcaption></figure>",
+            f"<figure><img src='{style_uri}' alt=''>"
+            f"<figcaption>Image 2 — {html.escape(style_image.name)}</figcaption></figure>",
+            "</div>",
+            f"<pre>{html.escape(entry['prompt'])}</pre>",
+            "</div>",
+        ]
+    out.append("</body></html>")
+    return "\n".join(out)
