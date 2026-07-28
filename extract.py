@@ -218,13 +218,24 @@ def find_contents(objects) -> dict:
     return contents
 
 
-def _exclusion_clause(ids) -> str:
-    """Tell the generator what to leave out of a crop that shows too much."""
+def exclusion_names(ids) -> list[str]:
+    """Humanised names for the ids a box swallows, capped and summarised.
+
+    Public because two callers format this same list into different sentences:
+    extract's own paragraph prompt and brief.py's DO NOT DRAW list. Capping and
+    pluralisation living in one place is the point — this pluralisation has been
+    wrong once already.
+    """
     named = [i.replace("_", " ") for i in ids[:MAX_NAMED_CONTENTS]]
     rest = len(ids) - MAX_NAMED_CONTENTS
     if rest > 0:
         named.append(f"and {rest} other element" + ("s" if rest > 1 else ""))
-    return ("drawn on its own, without the " + ", ".join(named)
+    return named
+
+
+def _exclusion_clause(ids) -> str:
+    """Tell the generator what to leave out of a crop that shows too much."""
+    return ("drawn on its own, without the " + ", ".join(exclusion_names(ids))
             + " visible inside it in the reference image")
 
 
