@@ -261,7 +261,15 @@ Treat that description as ground truth about what exists and where. Every object
 the user names must appear in "objects" at the position they describe, even if
 you would otherwise have missed it, merged it into a neighbour, or read it as
 part of the background. Keep finding the objects the user did not mention too —
-their description adds to your list, it does not replace it."""
+their description adds to your list, it does not replace it.
+
+Where the description conflicts with the rules above, follow the description.
+The rules are defaults for when nobody has told you what the game needs; the
+user has. If they ask for a whole framing structure as one sprite, box it whole
+rather than splitting it into its repeating piece. If they ask for a variant
+that is covered up in the image — an empty slot, a label with no text — give it
+its own entry, box the clearest example of that part, and say in "subject" and
+"detail" what must be left out when it is drawn."""
 
 
 def normalise_views(views, animated: bool) -> list[str]:
