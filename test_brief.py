@@ -350,10 +350,10 @@ def test_a_rejected_box_is_reported_and_the_rest_survive():
     with tempfile.TemporaryDirectory() as tmp:
         code, out_dir, _s = _run(tmp, data)
         body = (out_dir / "brief.html").read_text()
-    assert code == 0
-    assert "alpha-front" in body
-    assert "whole-front" not in body
-    assert not (out_dir / "refs" / "whole.png").exists()
+        assert code == 0
+        assert "alpha-front" in body
+        assert "whole-front" not in body
+        assert not (out_dir / "refs" / "whole.png").exists()
 
 
 def test_no_usable_object_writes_nothing():
@@ -363,8 +363,8 @@ def test_no_usable_object_writes_nothing():
     ])
     with tempfile.TemporaryDirectory() as tmp:
         code, out_dir, _s = _run(tmp, data)
-    assert code == 1
-    assert not (out_dir / "brief.html").exists()
+        assert code == 1
+        assert not (out_dir / "brief.html").exists()
 
 
 def test_an_existing_brief_is_not_overwritten_from_an_outside_analysis():
@@ -400,8 +400,8 @@ def test_a_bad_analysis_writes_nothing_and_exits_one():
     del data["style"]
     with tempfile.TemporaryDirectory() as tmp:
         code, out_dir, _s = _run(tmp, data)
-    assert code == 1
-    assert not (out_dir / "brief.html").exists()
+        assert code == 1
+        assert not (out_dir / "brief.html").exists()
 
 
 def test_an_unreadable_image_exits_one():
