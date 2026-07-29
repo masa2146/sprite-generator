@@ -628,6 +628,9 @@ h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
 figure { margin: 0; }
 figcaption { color: #9a9ab0; font-size: .75rem; margin-top: .3rem; }
 img { max-width: 190px; max-height: 190px; background: #22222c; border-radius: 6px; }
+.style { margin: 0 0 2rem; }
+.style img { max-width: 260px; max-height: 320px; }
+.pair { color: #9a9ab0; font-size: .85rem; margin: 0; align-self: center; }
 pre { margin: 0; padding: .85rem; background: #1e1e28; border-radius: 6px;
       white-space: pre-wrap; word-break: break-word;
       font: 13px/1.5 ui-monospace, monospace; }
@@ -655,6 +658,17 @@ def page(entries, style_image: Path, title: str) -> str:
         f"<p class='meta'>{len(entries)} prompts · upload BOTH images with every "
         "message · one message per sprite</p>",
     ]
+    # The style image is drawn once, at the top. Repeating it per asset inlines
+    # the same base64 blob N times: measured at 55 MB for a 2.4 MB screenshot
+    # across 17 assets. Each asset still names it, so the "upload both" rule
+    # survives without the bytes.
+    out += [
+        "<figure class='style'>",
+        f"<img src='{style_uri}' alt=''>",
+        f"<figcaption>Image 2 — {html.escape(style_image.name)} — upload this "
+        "with EVERY message, alongside the crop</figcaption>",
+        "</figure>",
+    ]
     for entry in entries:
         crop = Path(entry["crop"])
         out += [
@@ -663,8 +677,7 @@ def page(entries, style_image: Path, title: str) -> str:
             "<div class='row'>",
             f"<figure><img src='{_data_uri(crop)}' alt=''>"
             f"<figcaption>Image 1 — {html.escape(crop.name)}</figcaption></figure>",
-            f"<figure><img src='{style_uri}' alt=''>"
-            f"<figcaption>Image 2 — {html.escape(style_image.name)}</figcaption></figure>",
+            f"<p class='pair'>+ Image 2 — {html.escape(style_image.name)}</p>",
             "</div>",
             f"<pre>{html.escape(entry['prompt'])}</pre>",
             "</div>",
