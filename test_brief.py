@@ -235,6 +235,19 @@ def test_the_page_inlines_both_images():
     assert "_style.png" in html_text
 
 
+def test_the_style_image_is_inlined_once_no_matter_how_many_assets():
+    """Inlining it per asset produced a 55 MB file for a 2.4 MB screenshot
+    across 17 assets. Each asset still names the file, so the rule that both
+    images go with every message survives without the bytes."""
+    with tempfile.TemporaryDirectory() as tmp:
+        crop = _png(Path(tmp) / "alpha.png")
+        style = _png(Path(tmp) / "_style.png", size=(40, 40))
+        entries = [{"id": f"alpha-{i}", "crop": crop, "prompt": "P"} for i in range(4)]
+        html_text = brief.page(entries, style, "t")
+    assert html_text.count("data:image/png;base64,") == len(entries) + 1
+    assert html_text.count("_style.png") == len(entries) + 1   # named per asset
+
+
 def test_each_asset_gets_its_own_section_and_prompt():
     with tempfile.TemporaryDirectory() as tmp:
         crop = _png(Path(tmp) / "alpha.png")
@@ -267,6 +280,7 @@ def test_the_page_references_no_external_file():
             [{"id": "alpha-front", "crop": crop, "prompt": "P"}], style, "t")
     assert "http://" not in html_text and "https://" not in html_text
     assert "<link" not in html_text and "<script" not in html_text
+    assert "url(" not in html_text and "@import" not in html_text
 
 
 if __name__ == "__main__":
