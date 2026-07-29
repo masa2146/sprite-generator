@@ -736,14 +736,14 @@ def _run(tmp, data=None, out_name="b", extra=None):
 def test_a_run_writes_crops_the_style_copy_the_sheet_and_the_brief():
     with tempfile.TemporaryDirectory() as tmp:
         code, out_dir, scene = _run(tmp)
-    assert code == 0
-    assert (out_dir / "brief.html").exists()
-    assert (out_dir / "analysis.json").exists()
-    assert (out_dir / "refs" / "alpha.png").exists()
-    assert (out_dir / "refs" / "_contact_sheet.png").exists()
-    style_copy = out_dir / "refs" / "_style.png"
-    assert style_copy.exists()
-    assert style_copy.read_bytes() == scene.read_bytes()
+        assert code == 0
+        assert (out_dir / "brief.html").exists()
+        assert (out_dir / "analysis.json").exists()
+        assert (out_dir / "refs" / "alpha.png").exists()
+        assert (out_dir / "refs" / "_contact_sheet.png").exists()
+        style_copy = out_dir / "refs" / "_style.png"
+        assert style_copy.exists()
+        assert style_copy.read_bytes() == scene.read_bytes()
 
 
 def test_two_views_produce_two_prompts_over_one_crop():
@@ -751,10 +751,10 @@ def test_two_views_produce_two_prompts_over_one_crop():
     with tempfile.TemporaryDirectory() as tmp:
         code, out_dir, _scene_path = _run(tmp)
         body = (out_dir / "brief.html").read_text()
-    assert code == 0
-    assert body.count("class='asset'") == 2
-    assert "alpha-front" in body and "alpha-side" in body
-    assert len(list((out_dir / "refs").glob("alpha*.png"))) == 1
+        assert code == 0
+        assert body.count("class='asset'") == 2
+        assert "alpha-front" in body and "alpha-side" in body
+        assert len(list((out_dir / "refs").glob("alpha*.png"))) == 1
 
 
 def test_a_contained_object_reaches_the_do_not_draw_list():
@@ -823,8 +823,8 @@ def test_rerunning_from_the_briefs_own_analysis_is_allowed():
         inner.write_text(json.dumps(data), encoding="utf-8")
         code2 = brief.main(["--image", str(scene), "--analysis", str(inner),
                             "--out-dir", str(out_dir)])
-    assert code2 == 0
-    assert "a SECOND PASS rabbit" in (out_dir / "brief.html").read_text()
+        assert code2 == 0
+        assert "a SECOND PASS rabbit" in (out_dir / "brief.html").read_text()
 
 
 def test_a_bad_analysis_writes_nothing_and_exits_one():
