@@ -283,6 +283,137 @@ def test_the_page_references_no_external_file():
     assert "url(" not in html_text and "@import" not in html_text
 
 
+# --- the command ------------------------------------------------------------
+
+def _scene(tmp, size=(400, 600)):
+    from PIL import Image
+    path = Path(tmp) / "scene.png"
+    Image.new("RGB", size, (30, 30, 50)).save(path)
+    return path
+
+
+def _run(tmp, data=None, out_name="b", extra=None):
+    scene = _scene(tmp)
+    analysis = _write(tmp, data if data is not None else _analysis())
+    out_dir = Path(tmp) / out_name
+    argv = ["--image", str(scene), "--analysis", str(analysis),
+            "--out-dir", str(out_dir)]
+    return brief.main(argv + (extra or [])), out_dir, scene
+
+
+def test_a_run_writes_crops_the_style_copy_the_sheet_and_the_brief():
+    with tempfile.TemporaryDirectory() as tmp:
+        code, out_dir, scene = _run(tmp)
+        assert code == 0
+        assert (out_dir / "brief.html").exists()
+        assert (out_dir / "analysis.json").exists()
+        assert (out_dir / "refs" / "alpha.png").exists()
+        assert (out_dir / "refs" / "_contact_sheet.png").exists()
+        style_copy = out_dir / "refs" / "_style.png"
+        assert style_copy.exists()
+        assert style_copy.read_bytes() == scene.read_bytes()
+
+
+def test_two_views_produce_two_prompts_over_one_crop():
+    """Same crop, different VIEW line — the semantics extract already uses."""
+    with tempfile.TemporaryDirectory() as tmp:
+        code, out_dir, _scene_path = _run(tmp)
+        body = (out_dir / "brief.html").read_text()
+        assert code == 0
+        assert body.count("class='asset'") == 2
+        assert "alpha-front" in body and "alpha-side" in body
+        assert len(list((out_dir / "refs").glob("alpha*.png"))) == 1
+
+
+def test_a_contained_object_reaches_the_do_not_draw_list():
+    data = _analysis(objects=[
+        {"id": "frame", "bbox": [0, 0, 300, 300], "views": ["front"],
+         "subject": "a framing track"},
+        {"id": "brick", "bbox": [50, 50, 90, 90], "views": ["front"],
+         "subject": "a brick"},
+    ])
+    with tempfile.TemporaryDirectory() as tmp:
+        code, out_dir, _s = _run(tmp, data)
+        body = (out_dir / "brief.html").read_text()
+    assert code == 0
+    assert "visible inside it in the reference image" in body
+    assert "brick" in body
+
+
+def test_a_rejected_box_is_reported_and_the_rest_survive():
+    data = _analysis(objects=[
+        {"id": "alpha", "bbox": [10, 10, 110, 110], "views": ["front"],
+         "subject": "a thing"},
+        {"id": "whole", "bbox": [0, 0, 400, 600], "views": ["front"],
+         "subject": "the whole screen"},
+    ])
+    with tempfile.TemporaryDirectory() as tmp:
+        code, out_dir, _s = _run(tmp, data)
+        body = (out_dir / "brief.html").read_text()
+    assert code == 0
+    assert "alpha-front" in body
+    assert "whole-front" not in body
+    assert not (out_dir / "refs" / "whole.png").exists()
+
+
+def test_no_usable_object_writes_nothing():
+    data = _analysis(objects=[
+        {"id": "whole", "bbox": [0, 0, 400, 600], "views": ["front"],
+         "subject": "the whole screen"},
+    ])
+    with tempfile.TemporaryDirectory() as tmp:
+        code, out_dir, _s = _run(tmp, data)
+    assert code == 1
+    assert not (out_dir / "brief.html").exists()
+
+
+def test_an_existing_brief_is_not_overwritten_from_an_outside_analysis():
+    """A brief you have already reviewed and pruned is the most valuable thing
+    in this flow."""
+    with tempfile.TemporaryDirectory() as tmp:
+        code, out_dir, _s = _run(tmp)
+        assert code == 0
+        marker = "<!-- mine -->"
+        (out_dir / "brief.html").write_text(marker, encoding="utf-8")
+        code2, _o, _s2 = _run(tmp)
+        assert code2 == 1
+        assert (out_dir / "brief.html").read_text() == marker
+
+
+def test_rerunning_from_the_briefs_own_analysis_is_allowed():
+    """The whole review loop is: edit analysis.json in place, run again."""
+    with tempfile.TemporaryDirectory() as tmp:
+        code, out_dir, scene = _run(tmp)
+        assert code == 0
+        inner = out_dir / "analysis.json"
+        data = json.loads(inner.read_text())
+        data["objects"][0]["subject"] = "a SECOND PASS rabbit"
+        inner.write_text(json.dumps(data), encoding="utf-8")
+        code2 = brief.main(["--image", str(scene), "--analysis", str(inner),
+                            "--out-dir", str(out_dir)])
+        assert code2 == 0
+        assert "a SECOND PASS rabbit" in (out_dir / "brief.html").read_text()
+
+
+def test_a_bad_analysis_writes_nothing_and_exits_one():
+    data = _analysis()
+    del data["style"]
+    with tempfile.TemporaryDirectory() as tmp:
+        code, out_dir, _s = _run(tmp, data)
+    assert code == 1
+    assert not (out_dir / "brief.html").exists()
+
+
+def test_an_unreadable_image_exits_one():
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = Path(tmp) / "bad.png"
+        bad.write_text("not an image", encoding="utf-8")
+        analysis = _write(tmp, _analysis())
+        code = brief.main(["--image", str(bad), "--analysis", str(analysis),
+                           "--out-dir", str(Path(tmp) / "b")])
+    assert code == 1
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

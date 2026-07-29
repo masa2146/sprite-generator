@@ -13,10 +13,16 @@ their text, and a frame whose crop showed everything it framed.
 
 from __future__ import annotations
 
+import argparse
 import base64
 import html
 import json
+import shutil
+import sys
+import webbrowser
 from pathlib import Path
+
+from PIL import Image
 
 import extract
 import vision
@@ -218,3 +224,114 @@ def page(entries, style_image: Path, title: str) -> str:
         ]
     out.append("</body></html>")
     return "\n".join(out)
+
+
+# --- the command --------------------------------------------------------
+
+def _load_image(image_path: Path):
+    try:
+        return Image.open(image_path).convert("RGB")
+    except Exception as exc:
+        raise BriefError(f"cannot read {image_path}: {exc}") from exc
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="brief.py",
+        description="Turn a screenshot and its analysis into crops and "
+                    "paste-ready prompts for manual generation.",
+    )
+    parser.add_argument("--image", required=True, help="source screenshot")
+    parser.add_argument("--analysis", required=True, help="analysis.json")
+    parser.add_argument("--out-dir", required=True,
+                        help="directory to create; refused if it already holds a brief")
+    parser.add_argument("--no-open", action="store_true",
+                        help="do not open the contact sheet")
+    args = parser.parse_args(argv)
+
+    image_path = Path(args.image)
+    analysis_path = Path(args.analysis)
+    out_dir = Path(args.out_dir)
+    refs_dir = out_dir / "refs"
+    brief_path = out_dir / "brief.html"
+    inner_analysis = out_dir / "analysis.json"
+
+    # Refuse to clobber a brief the user has already reviewed — unless the
+    # analysis being read IS this brief's own, which is the review loop:
+    # edit analysis.json in place, run again.
+    if brief_path.exists():
+        same = (analysis_path.resolve() == inner_analysis.resolve()
+                if inner_analysis.exists() else False)
+        if not same:
+            print(f"error: {brief_path} already exists — delete it, choose another "
+                  f"--out-dir, or edit {inner_analysis} and re-run from that file",
+                  file=sys.stderr)
+            return 1
+
+    try:
+        style, objects = load_analysis(analysis_path)
+        image = _load_image(image_path)
+    except BriefError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        kept, rejected = extract.crop_objects(image, objects, refs_dir)
+    except OSError as exc:
+        print(f"error: cannot write crops to {refs_dir}: {exc}", file=sys.stderr)
+        return 1
+
+    for obj_id, reason in rejected:
+        print(f"  dropped {obj_id}: {reason}", file=sys.stderr)
+
+    if not kept:
+        print("error: no usable objects — nothing written", file=sys.stderr)
+        return 1
+
+    contents = extract.find_contents(kept)
+    for obj_id, inside in contents.items():
+        print(f"note: {obj_id}'s box also contains {len(inside)} other object(s) "
+              f"({', '.join(inside)}) — its crop shows them too, and its prompt "
+              f"asks for it without them", file=sys.stderr)
+
+    style_copy = refs_dir / "_style.png"
+    try:
+        shutil.copyfile(image_path, style_copy)
+    except OSError as exc:
+        print(f"error: cannot write {style_copy}: {exc}", file=sys.stderr)
+        return 1
+
+    sheet = None
+    try:
+        sheet = extract.labelled_sheet(kept, refs_dir / "_contact_sheet.png")
+    except Exception as exc:
+        # A review aid must not cost the user the crops and prompts.
+        print(f"warning: contact sheet not written: {exc}", file=sys.stderr)
+
+    entries = []
+    for obj in kept:
+        for view in obj["views"]:
+            entries.append({
+                "id": "{}-{}".format(obj["id"], view),
+                "crop": obj["crop"],
+                "prompt": asset_prompt(obj, view, style, contents.get(obj["id"])),
+            })
+
+    title = f"{out_dir.name} — prompts for manual generation"
+    try:
+        brief_path.write_text(page(entries, style_copy, title), encoding="utf-8")
+        if analysis_path.resolve() != inner_analysis.resolve():
+            shutil.copyfile(analysis_path, inner_analysis)
+    except OSError as exc:
+        print(f"error: cannot write {brief_path}: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"\n{len(kept)} objects, {len(entries)} prompts -> {brief_path}")
+    print(f"uploads -> {refs_dir}")
+    if sheet and not args.no_open:
+        webbrowser.open(Path(sheet).resolve().as_uri())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
