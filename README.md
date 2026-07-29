@@ -189,6 +189,49 @@ mailed on its own.
 
 `--only` takes the same comma-separated asset ids as `build`.
 
+## Generating by hand: `brief.py`
+
+Generating a 17-asset set through the API cost roughly $1.8 and four of them
+came out unusable — the money is spent before the result can be judged. The
+manual flow moves generation to Gemini or ChatGPT, where a retry is free.
+
+Ask Claude Code to use the `sprite-brief` skill with your screenshot and a
+description of what you want. It writes `analysis.json`, runs:
+
+```bash
+python3 brief.py --image screen.png --analysis analysis.json --out-dir briefs/bunny
+```
+
+and leaves:
+
+```
+briefs/bunny/
+  analysis.json            # edit a box by hand and re-run; no re-analysis
+  brief.html               # one prompt per sprite, both images shown inline
+  refs/
+    _style.png             # the screenshot — upload this with every message
+    _contact_sheet.png     # numbered, labelled
+    conveyor_belt_frame.png
+```
+
+For each sprite: paste its prompt, and upload **both** `refs/<id>.png` and
+`refs/_style.png`. Every message must carry both — the image model does not see
+the chat history, so a screenshot uploaded once at the top never reaches the
+later generations, and the style drifts. Start a fresh chat per set.
+
+The prompt is a structured block — `REFERENCES`, `OBJECT`, `FORM`, `DETAIL`,
+`VIEW`, `ART STYLE`, `OUTPUT`, `DO NOT DRAW`. Each block answers a failure
+measured on the paid path: unlabelled reference images, a missing "exactly one"
+that produced twelve balls, HUD labels that kept their text, and a frame whose
+crop showed everything it framed.
+
+Backgrounds are flat `#808080` rather than transparent, so the download can be
+cut locally with `post.py`. That grey was measured clean; `#FF00FF` bled colour
+into the alpha edges.
+
+`brief.py` refuses to overwrite an existing `brief.html` unless you re-run from
+that brief's own `analysis.json` — which is the review loop.
+
 ## Configuration
 
 `make` reads its endpoints from `.env` in the project root (copy `.env.example`). A real
@@ -341,7 +384,7 @@ is not implemented.
 ## Tests
 
 ```bash
-python3 test_post.py && python3 test_config.py && python3 test_client.py && python3 test_build.py && python3 test_packwriter.py && python3 test_vision.py && python3 test_env.py && python3 test_make.py && python3 test_extract.py && python3 test_export.py
+python3 test_post.py && python3 test_config.py && python3 test_client.py && python3 test_build.py && python3 test_packwriter.py && python3 test_vision.py && python3 test_env.py && python3 test_make.py && python3 test_extract.py && python3 test_export.py && python3 test_brief.py
 ```
 
 No network, no rembg model download, runs in about a second.
