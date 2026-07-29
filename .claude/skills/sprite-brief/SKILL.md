@@ -29,7 +29,7 @@ description.
 
 ```json
 {
-  "style": "one line: render, camera, lighting, linework, realism, then hex codes",
+  "style": "one line: render, lighting, linework, realism, then hex codes",
   "objects": [
     {
       "id": "conveyor_belt_frame",
@@ -60,6 +60,9 @@ Rules:
   ball, not the trail of balls. This is the single most common way this flow
   goes wrong.
 - `style` must describe HOW the image looks and must never name an object.
+- `style` must never name a camera angle or viewpoint — the script always adds
+  its own `VIEW` line per object, and a style line that names an angle too
+  will contradict it on any view but `front`.
 - Never write a label's text into `subject`, `form` or `detail`. The user
   generally wants HUD parts blank; text in the fields defeats the ban on text
   in the prompt.
@@ -97,8 +100,9 @@ Ask only where the answer changes a crop. Batch every question into one message.
 | the user said "empty" / "blank" / "without text" | which state should be drawn? |
 | you could not find something they named | say so, and ask where it is |
 
-Then edit `analysis.json` and run the script again. Re-running is free and
-takes seconds, so iterate until the sheet is right.
+Then edit `<out-dir>/analysis.json` — the copy the script wrote, not the
+original — and run the script again with `--analysis` pointing at that copy.
+Re-running is free and takes seconds, so iterate until the sheet is right.
 
 ### 6. Hand over
 
