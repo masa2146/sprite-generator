@@ -77,19 +77,26 @@ def _sniff_mime(data: bytes) -> str:
     return "image/png"  # unknown: fall back to the previous default
 
 
+def image_part(data: bytes) -> dict:
+    """One image as an OpenAI-shaped data-URI part."""
+    b64 = base64.b64encode(data).decode()
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:{_sniff_mime(data)};base64,{b64}"},
+    }
+
+
 def build_payload(
     model: str,
     prompt: str,
     reference_png: bytes | None = None,
     seed: int | None = None,
+    style_png: bytes | None = None,
 ) -> dict:
+    # Order is the contract: the prompt's REFERENCES block calls the first image
+    # "Image 1 — the object to redraw" and the second "Image 2 — style only".
     content: list[dict] = [{"type": "text", "text": prompt}]
-    if reference_png:
-        b64 = base64.b64encode(reference_png).decode()
-        mime = _sniff_mime(reference_png)
-        content.append(
-            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
-        )
+    content += [image_part(img) for img in (reference_png, style_png) if img]
     body = {
         "model": model,
         "modalities": ["image", "text"],
@@ -108,6 +115,7 @@ def build_payload_images(
     aspect_ratio: str | None = None,
     reference_png: bytes | None = None,
     seed: int | None = None,
+    style_png: bytes | None = None,
 ) -> dict:
     """Payload for POST {base_url}/images. Optional fields are omitted
     entirely (not sent as null) when absent — that's what the contract asks for."""
@@ -116,12 +124,10 @@ def build_payload_images(
         body["aspect_ratio"] = aspect_ratio
     if seed is not None:
         body["seed"] = seed
-    if reference_png:
-        b64 = base64.b64encode(reference_png).decode()
-        mime = _sniff_mime(reference_png)
-        body["input_references"] = [
-            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
-        ]
+    # Same order as build_payload: object first, style second.
+    refs = [image_part(img) for img in (reference_png, style_png) if img]
+    if refs:
+        body["input_references"] = refs
     return body
 
 
@@ -248,6 +254,7 @@ def generate(
     seed: int | None = None,
     retries: int = 3,
     sleeper=time.sleep,
+    style_png: bytes | None = None,
 ) -> tuple[bytes, float | None, dict]:
     """Generate one image. Returns (png_bytes, cost_or_none, raw_response).
 
@@ -262,13 +269,14 @@ def generate(
         url = pack.base_url.rstrip("/") + "/images"
         payload = build_payload_images(
             pack.model, prompt, aspect_ratio=aspect_ratio,
-            reference_png=reference_png, seed=seed,
+            reference_png=reference_png, seed=seed, style_png=style_png,
         )
         parse = parse_image_images
     else:
         url = pack.base_url.rstrip("/") + "/chat/completions"
         payload = build_payload(
-            pack.model, chat_prompt_with_ratio(prompt, aspect_ratio), reference_png, seed
+            pack.model, chat_prompt_with_ratio(prompt, aspect_ratio), reference_png, seed,
+            style_png=style_png,
         )
         parse = parse_image
 

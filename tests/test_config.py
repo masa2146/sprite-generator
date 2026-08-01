@@ -3,6 +3,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from spritegen import config
 from spritegen import envfile
 
 from spritegen.config import (
@@ -112,11 +113,49 @@ def test_full_prompt_includes_prefix_asset_and_bg_clause_no_ratio():
     pack = load_pack(_write(FULL_SPEC))
     hero = {a.id: a for a in pack.assets}["hero_idle"]
     text = pack.full_prompt(hero)
-    assert text.startswith("hypercasual asset, glossy")
+    assert "ART STYLE  hypercasual asset, glossy" in text
     assert "round blue character" in text
     assert BG_CLAUSE in text
     assert "aspect ratio" not in text
-    assert text.endswith(BG_CLAUSE)
+    assert text.endswith(config.FIXED_BANS)
+
+
+def test_a_sprite_prompt_carries_every_block_in_order():
+    """The blocks are the point: a constraint buried in a run-on sentence is the
+    one a model skips. REFERENCES is absent here — this pack sends one image."""
+    _clear_env()
+    pack = load_pack(_write(FULL_SPEC))
+    text = pack.full_prompt({a.id: a for a in pack.assets}["hero_idle"])
+    positions = [text.index(b) for b in ("ART STYLE", "OUTPUT", "DO NOT DRAW")]
+    assert positions == sorted(positions)
+    assert "REFERENCES" not in text
+    assert "Exactly one" in text
+    assert "any text, numbers, labels or logos" in text
+
+
+def test_the_references_block_appears_only_when_two_images_are_sent():
+    """build_one sends the style image beside an asset's own crop, never
+    instead of one — so the block that names Image 1 and Image 2 must not
+    promise a second image an asset without a crop will never get."""
+    _clear_env()
+    spec = _write(REF_SPEC)
+    pack = load_pack(spec)
+    by_id = {a.id: a for a in pack.assets}
+    assert "REFERENCES" not in pack.full_prompt(by_id["with_ref"])
+
+    pack.style_reference = spec.parent / "screenshot.png"
+    assert "REFERENCES" in pack.full_prompt(by_id["with_ref"])
+    assert "REFERENCES" not in pack.full_prompt(by_id["without_ref"])
+
+
+def test_an_assets_exclude_is_filed_under_do_not_draw():
+    _clear_env()
+    pack = load_pack(_write(FULL_SPEC))
+    hero = {a.id: a for a in pack.assets}["hero_idle"]
+    assert "- the brick visible inside it" not in pack.full_prompt(hero)
+    hero.exclude = "the brick visible inside it in the reference image"
+    text = pack.full_prompt(hero)
+    assert "DO NOT DRAW\n- the brick visible inside it" in text
 
 
 def test_cutout_false_prompt_has_no_backdrop_clause():
@@ -589,6 +628,19 @@ def test_an_absolute_reference_is_not_joined_to_the_pack_dir():
     ref = {a.id: a for a in load_pack(spec).assets}["with_ref"].reference
     assert ref == Path("/tmp/abs/thing.png").resolve()
     assert spec.parent not in ref.parents      # the real invariant: no join happened
+
+
+def test_style_reference_resolves_relative_to_the_pack_file():
+    _clear_env()
+    spec = _write(REF_SPEC.replace('prefix = "p"',
+                                   'prefix = "p"\nreference = "refs/_style.png"'))
+    pack = load_pack(spec)
+    assert pack.style_reference == (spec.parent / "refs" / "_style.png").resolve()
+
+
+def test_style_reference_is_none_when_absent():
+    _clear_env()
+    assert load_pack(_write(REF_SPEC)).style_reference is None
 
 
 def test_reference_does_not_have_to_exist_at_load_time():

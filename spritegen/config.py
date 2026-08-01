@@ -29,7 +29,73 @@ _VALID_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # a synthetic sprite across four subject colours: #FF00FF left 610-2079 tinted
 # edge pixels every time, #808080 left zero, with segmentation quality
 # unchanged (rembg keys on salience, not colour contrast).
-BG_CLAUSE = "isolated on flat solid #808080 neutral grey background, no shadow, no ground plane"
+BG_CLAUSE = ("isolated on flat solid #808080 neutral grey background, no shadow, "
+             "no ground plane, no gradient, no scene, no props")
+
+# A sprite prompt is labelled blocks rather than one sentence. The manual path
+# (brief.py) was built that way after the run-on form lost its constraints: the
+# clauses a model skips are the ones buried mid-sentence, and the measured
+# failures were twelve balls instead of one and HUD labels that kept their text.
+# The blocks live here, not in either caller, so the paid and manual paths
+# cannot drift apart.
+# Image 1 needs both halves of its instruction. "Reproduce THIS object" alone
+# got the object reproduced faithfully -- including the fact that the crop is a
+# 52x60 lift from a phone screenshot. The render came back as hard-outlined
+# pixel art against a style prefix asking in so many words for "flat
+# vector-style, no hard outlines": shown pixel art and told to reproduce it, the
+# model reproduces pixel art, because image evidence beats a text style block.
+# Smoothly upscaling the crop before sending it did not help -- the model
+# resamples to its own latent resolution anyway, so what carries is the
+# reference's content, not its pixel dimensions. Naming the artefacts is what
+# separates identity from rendering.
+REFERENCES_BLOCK = (
+    "REFERENCES\n"
+    "- Image 1 — the object to redraw. Take its IDENTITY from this and nothing\n"
+    "  else: silhouette, proportions, colours, markings, features.\n"
+    "  Do NOT take its rendering. Image 1 is a small low-resolution screen\n"
+    "  capture; its pixellation, blocky stair-stepped edges and colour banding\n"
+    "  are capture artefacts, not design. Redraw the object cleanly at full\n"
+    "  resolution in the ART STYLE below.\n"
+    "- Image 2 — the reference screenshot. Use it ONLY for art style, palette\n"
+    "  and lighting. Do not copy any object from it."
+)
+
+def output_block(subject: str = "of the object described above") -> str:
+    """The OUTPUT block. `subject` names the thing when the caller knows it.
+
+    The count is what matters — an unqualified prompt produced twelve balls in
+    one image — but naming it is stronger where a name exists. A pack's asset id
+    ("coin-front") is not one, so the build path leans on the default, which
+    points at the OBJECT line the prompt already carries.
+    """
+    return (
+        "OUTPUT\n"
+        f"- Exactly one {subject}, on its own. Not a set, not a grid, not a sheet.\n"
+        "- Centred and complete, nothing touching or cut off at the edges.\n"
+        "- Small even margin on all sides.\n"
+        f"- {BG_CLAUSE}"
+    )
+
+
+FIXED_BANS = (
+    "- any text, numbers, labels or logos\n"
+    "- any other object from the reference image\n"
+    "- more than one copy of the object"
+)
+
+
+def do_not_draw(exclude: str = "") -> str:
+    """The DO NOT DRAW block: this asset's own exclusions, then the fixed bans.
+
+    `exclude` is what a framing object's crop shows but must not be redrawn —
+    see extract.exclusion_clause. Empty for an asset whose crop shows only
+    itself, which is most of them.
+    """
+    lines = ["DO NOT DRAW"]
+    if exclude and exclude.strip():
+        lines.append(f"- {exclude.strip()}")
+    lines.append(FIXED_BANS)
+    return "\n".join(lines)
 
 
 class SpecError(Exception):
@@ -43,6 +109,10 @@ class Asset:
     aspect_ratio: str = "1:1"
     cutout: bool = True  # sprite-with-subject vs. whole-image (background/tile)
     reference: Path | None = None   # per-asset reference image, resolved absolute
+    # What this asset's reference image shows but the generated sprite must not
+    # (a tray's crop necessarily shows what sits in the tray). Data, not prose,
+    # so it can be hand-edited in the pack; full_prompt files it under DO NOT DRAW.
+    exclude: str = ""
 
 
 @dataclass
@@ -53,6 +123,10 @@ class Pack:
     model: str
     style_prefix: str
     plate_prompt: str
+    # The image the whole pack was derived from, sent as Image 2 beside each
+    # asset's own crop. Text alone loses the palette: the manual path measured a
+    # generic grey object from the version that sent no style image.
+    style_reference: Path | None = None
     assets: list[Asset] = field(default_factory=list)
     out_root: Path = Path("out")
     transport: str = DEFAULT_TRANSPORT
@@ -91,13 +165,22 @@ class Pack:
         structured field, the chat transport appends it to the prompt text."""
         prefix = self.style_prefix.strip()
         body = asset.prompt.strip()
-        if asset.cutout:
-            # This asset is a sprite with a subject: ask for a flat backdrop so
-            # it can be cut out locally (see BG_CLAUSE).
-            return f"{prefix} {body} {BG_CLAUSE}"
-        # This asset IS the whole image (a background, a seamless tile) — there
-        # is nothing to isolate, so no backdrop clause and no cutout later.
-        return f"{prefix} {body}"
+        if not asset.cutout:
+            # This asset IS the whole image (a background, a seamless tile) —
+            # there is nothing to isolate, so no backdrop clause, no cutout
+            # later, and none of the single-subject blocks below.
+            return f"{prefix} {body}".strip()
+
+        blocks = []
+        # Only when two images actually go on the wire — build_one sends the
+        # style image beside an asset's own reference, never instead of one.
+        if asset.reference is not None and self.style_reference is not None:
+            blocks.append(REFERENCES_BLOCK)
+        blocks.append(body)
+        if prefix:
+            blocks.append(f"ART STYLE  {prefix}")
+        blocks += [output_block(), do_not_draw(asset.exclude)]
+        return "\n\n".join(blocks)
 
     def plate_full_prompt(self) -> str:
         return f"{self.style_prefix.strip()} {self.plate_prompt.strip()} {BG_CLAUSE}"
@@ -126,6 +209,19 @@ def _check_key_env(key_env, where: str) -> None:
             'holds the key, e.g. key_env = "OPENROUTER_API_KEY", with the key itself '
             "set via `export OPENROUTER_API_KEY=sk-...` — never the key itself in the spec."
         )
+
+
+def _resolve_ref(raw_ref, spec_path: Path, where: str) -> Path | None:
+    """A reference path from the spec, resolved relative to the spec file.
+
+    Relative to the pack file, not the cwd: a pack carries its refs with it.
+    """
+    if raw_ref is None:
+        return None
+    if not isinstance(raw_ref, str) or not raw_ref.strip():
+        raise SpecError(f"{where}: 'reference' must be a non-empty string")
+    ref_path = Path(raw_ref)
+    return (ref_path if ref_path.is_absolute() else spec_path.parent / ref_path).resolve()
 
 
 def load_pack(
@@ -202,24 +298,14 @@ def load_pack(
         if row["id"] in seen:
             raise SpecError(f"duplicate asset id: {row['id']}")
         seen.add(row["id"])
-        raw_ref = row.get("reference")
-        resolved_ref = None
-        if raw_ref is not None:
-            if not isinstance(raw_ref, str) or not raw_ref.strip():
-                raise SpecError(f"assets[{i}]: 'reference' must be a non-empty string")
-            ref_path = Path(raw_ref)
-            # Relative to the pack file, not the cwd: a pack carries its refs with it.
-            resolved_ref = (
-                ref_path if ref_path.is_absolute()
-                else (spec_path.parent / ref_path)
-            ).resolve()
         assets.append(
             Asset(
                 id=row["id"],
                 prompt=row["prompt"],
                 aspect_ratio=row.get("aspect_ratio", default_ratio),
                 cutout=row.get("cutout", True),
-                reference=resolved_ref,
+                reference=_resolve_ref(row.get("reference"), spec_path, f"assets[{i}]"),
+                exclude=row.get("exclude", ""),
             )
         )
     if not assets:
@@ -232,6 +318,7 @@ def load_pack(
         model=resolved_model,
         style_prefix=style.get("prefix", ""),
         plate_prompt=style.get("plate_prompt", ""),
+        style_reference=_resolve_ref(style.get("reference"), spec_path, "[style]"),
         assets=assets,
         out_root=Path(out_root),
         transport=resolved_transport,

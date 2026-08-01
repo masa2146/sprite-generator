@@ -24,6 +24,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from . import config
 from . import extract
 from . import vision
 
@@ -90,49 +91,11 @@ def load_analysis(path) -> tuple[str, list[dict]]:
     return style.strip(), out
 
 
-_REFERENCES = """REFERENCES
-- Image 1 — the object to redraw. Reproduce THIS object.
-- Image 2 — the game screenshot. Use it ONLY for art style, palette and
-  lighting. Do not copy any object from it."""
-
-_OUTPUT_TAIL = """- Centred and complete, nothing touching or cut off at the edges.
-- Small even margin on all sides. Square image.
-- Flat solid #808080 background. No shadow, no ground plane, no gradient,
-  no scene, no props."""
-
 # Background is a flat grey rather than transparent because the downloaded file
 # is cut locally with post.py, and that was measured clean on #808080 while
 # #FF00FF bled colour into the alpha edges. Asking a model for a transparent
-# PNG varies by model and cannot be relied on.
-
-_FIXED_BANS = """- any text, numbers, labels or logos
-- any other object from the screenshot
-- more than one copy of the object"""
-
-_FIELDS = ("subject", "form", "detail", "state")
-_LABELS = {"subject": "OBJECT", "form": "FORM", "detail": "DETAIL", "state": "STATE"}
-
-
-def _field_block(obj: dict, view: str) -> str:
-    lines = []
-    for field in _FIELDS:
-        value = obj.get(field)
-        if isinstance(value, str) and value.strip():
-            lines.append(f"{_LABELS[field]:<10} {value.strip()}")
-    phrase = vision.VIEW_POOL.get(view, vision.VIEW_POOL[vision.DEFAULT_VIEW])
-    lines.append(f"{'VIEW':<10} {phrase}")
-    return "\n".join(lines)
-
-
-def _do_not_draw(contents) -> str:
-    lines = ["DO NOT DRAW"]
-    if contents:
-        # Naming, capping and pluralisation come from extract so the two
-        # callers cannot drift apart.
-        lines.append("- the " + ", ".join(extract.exclusion_names(contents))
-                     + " visible inside it in the reference image")
-    lines.append(_FIXED_BANS)
-    return "\n".join(lines)
+# PNG varies by model and cannot be relied on. The wording of every block below
+# lives in config, shared with the paid path so the two cannot drift.
 
 
 def asset_prompt(obj: dict, view: str, style: str, contents=None) -> str:
@@ -142,18 +105,15 @@ def asset_prompt(obj: dict, view: str, style: str, contents=None) -> str:
     were buried in a run-on sentence and the ones that mattered were the ones
     the model skipped.
     """
-    short = obj["id"].replace("_", " ")
-    output = (
-        "OUTPUT\n"
-        f"- Exactly one {short}, on its own. Not a set, not a grid, not a sheet.\n"
-        f"{_OUTPUT_TAIL}"
-    )
+    # Naming, capping and pluralisation come from extract so the two callers
+    # cannot drift apart.
+    exclude = extract.exclusion_clause(contents) if contents else ""
     return "\n\n".join([
-        _REFERENCES,
-        _field_block(obj, view),
+        config.REFERENCES_BLOCK,
+        vision.field_block(obj, view),
         f"ART STYLE  {style.strip()}",
-        output,
-        _do_not_draw(contents),
+        config.output_block(obj["id"].replace("_", " ")),
+        config.do_not_draw(exclude),
     ])
 
 

@@ -120,6 +120,23 @@ def test_payload_declares_webp_mime_for_a_webp_reference():
     assert url.startswith("data:image/webp;base64,")
 
 
+def test_payload_sends_the_style_image_second():
+    """Order is the contract: the prompt's REFERENCES block calls the crop
+    "Image 1" and the style screenshot "Image 2"."""
+    jpeg = b"\xff\xd8\xff\xe0FAKEJPEGBYTES"
+    content = orclient.build_payload(
+        "m/model", "hello", reference_png=PNG, style_png=jpeg
+    )["messages"][0]["content"]
+    assert len(content) == 3
+    assert content[1]["image_url"]["url"] == f"data:image/png;base64,{B64}"
+    assert content[2]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_a_style_image_alone_is_still_sent():
+    content = orclient.build_payload("m/model", "hello", style_png=PNG)["messages"][0]["content"]
+    assert len(content) == 2
+
+
 # --- images payload shape ---------------------------------------------------
 
 def test_images_payload_shape_and_optional_fields_omitted():
@@ -142,6 +159,16 @@ def test_images_payload_includes_aspect_ratio_seed_and_reference():
     assert body["input_references"] == [
         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{B64}"}}
     ]
+
+
+def test_images_payload_sends_both_references_in_order():
+    jpeg = b"\xff\xd8\xff\xe0FAKEJPEGBYTES"
+    refs = orclient.build_payload_images(
+        "m/model", "hello", reference_png=PNG, style_png=jpeg
+    )["input_references"]
+    assert len(refs) == 2
+    assert refs[0]["image_url"]["url"] == f"data:image/png;base64,{B64}"
+    assert refs[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
 def test_images_payload_declares_jpeg_mime_for_a_jpeg_reference():

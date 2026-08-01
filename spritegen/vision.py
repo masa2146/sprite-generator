@@ -198,6 +198,29 @@ VIEW_POOL = {
 }
 DEFAULT_VIEW = "front"
 
+# Labelled lines, one field per line, because a model skips a clause buried in a
+# sentence but answers a field it can see. "state" only exists on hand-written
+# analyses (brief.py); it is simply absent from a vision reply and dropped here.
+FIELD_LABELS = (
+    ("subject", "OBJECT"), ("form", "FORM"), ("detail", "DETAIL"), ("state", "STATE"),
+)
+
+
+def field_block(obj: dict, view: str) -> str:
+    """One object's fields as labelled lines, ending with its VIEW line.
+
+    Shared by the paid path (extract, into the pack) and the manual path
+    (brief, into the HTML) so the two produce the same prompt body.
+    """
+    lines = [
+        f"{label:<10} {obj[key].strip()}"
+        for key, label in FIELD_LABELS
+        if isinstance(obj.get(key), str) and obj[key].strip()
+    ]
+    phrase = VIEW_POOL.get(view, VIEW_POOL[DEFAULT_VIEW])
+    lines.append("{:<10} {}".format("VIEW", phrase))
+    return "\n".join(lines)
+
 OBJECT_ANALYSIS_PROMPT = """List every distinct sprite in this image and describe each one as JSON:
 
 {

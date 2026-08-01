@@ -224,8 +224,18 @@ def test_the_view_phrase_is_appended_to_the_prompt():
     tmp = tempfile.mkdtemp()
     assets = tomllib.loads(_pack_text(tmp))["assets"]
     from spritegen import vision
-    assert assets[1]["prompt"].endswith(vision.VIEW_POOL["side"])
+    assert assets[1]["prompt"].strip().endswith(vision.VIEW_POOL["side"])
     assert "a round thing" in assets[1]["prompt"]      # form is carried
+
+
+def test_the_prompt_body_is_labelled_lines():
+    """One field per labelled line, not a comma-joined sentence: the clause a
+    model skips is the one buried mid-sentence."""
+    tmp = tempfile.mkdtemp()
+    prompt = tomllib.loads(_pack_text(tmp))["assets"][0]["prompt"]
+    assert "OBJECT     " in prompt
+    assert "VIEW       " in prompt
+    assert prompt.index("OBJECT") < prompt.index("VIEW")
 
 
 def test_no_style_field_leaks_into_an_asset_prompt():
@@ -234,11 +244,14 @@ def test_no_style_field_leaks_into_an_asset_prompt():
         assert "render-value" not in a["prompt"]
 
 
-def test_an_object_with_no_subject_fields_does_not_start_the_prompt_with_a_comma():
+def test_an_object_with_no_subject_fields_still_gets_a_clean_view_line():
     """Minor 7: an object missing subject/form/detail must not produce a prompt
     like ", seen from directly the front" — the leading ", " meant the sprite
     would generate from style + view alone."""
-    assert extract._asset_prompt({"id": "x"}, "front") == "seen from directly the front"
+    from spritegen import vision
+    assert vision.field_block({"id": "x"}, "front") == (
+        "VIEW       seen from directly the front"
+    )
 
 
 def test_a_quote_in_a_description_does_not_break_the_toml():
@@ -705,10 +718,42 @@ def test_the_prompt_asks_for_the_object_without_its_contents():
         kept, _ = extract.crop_objects(_img(400, 600), objs, Path(td) / "refs")
         text = extract.pack_text("m/m", "K", {"render": "r"}, kept,
                                  Path(td) / "refs", Path(td) / "p.toml")
-    assets = {a["id"]: a["prompt"] for a in tomllib.loads(text)["assets"]}
-    assert "without the brick cluster" in assets["frame-front"]
-    assert "reference image" in assets["frame-front"]
-    assert "without the" not in assets["brick_cluster-front"]
+    assets = {a["id"]: a for a in tomllib.loads(text)["assets"]}
+    # An exclusion is data, not prose: config.do_not_draw files it at build time.
+    assert "the brick cluster" in assets["frame-front"]["exclude"]
+    assert "reference image" in assets["frame-front"]["exclude"]
+    assert "exclude" not in assets["brick_cluster-front"]
+
+
+def test_the_exclusion_reaches_the_wire_prompt():
+    """The pack is only half the path — the clause has to survive load_pack and
+    land under DO NOT DRAW, or the crop's extra objects get redrawn anyway."""
+    from spritegen import config
+    objs = _boxed(frame=[0, 0, 300, 300], brick_cluster=[50, 50, 90, 90])
+    objs[0].update(subject="a looping conveyor track", views=["front"], animated=False)
+    objs[1].update(subject="a brick", views=["front"], animated=False)
+    with tempfile.TemporaryDirectory() as td:
+        kept, _ = extract.crop_objects(_img(400, 600), objs, Path(td) / "refs")
+        pack_path = Path(td) / "p.toml"
+        pack_path.write_text(extract.pack_text("m/m", "K", {"render": "r"}, kept,
+                                               Path(td) / "refs", pack_path),
+                             encoding="utf-8")
+        pack = config.load_pack(pack_path)
+    frame = {a.id: a for a in pack.assets}["frame-front"]
+    assert "DO NOT DRAW\n- the brick cluster" in pack.full_prompt(frame)
+
+
+def test_the_style_image_becomes_the_packs_style_reference():
+    tmp = tempfile.mkdtemp()
+    kept, _ = extract.crop_objects(_img(), _objects(), Path(tmp) / "refs")
+    text = extract.pack_text("m/model", "K", {"render": "r"}, kept, Path(tmp) / "refs",
+                             Path(tmp) / "p.toml",
+                             style_image=Path(tmp) / "refs" / "_style.png")
+    assert tomllib.loads(text)["style"]["reference"].endswith("_style.png")
+    # Absent when no screenshot was saved: the pack must still build, on words alone.
+    plain = extract.pack_text("m/model", "K", {"render": "r"}, kept, Path(tmp) / "refs",
+                              Path(tmp) / "p.toml")
+    assert "reference" not in tomllib.loads(plain)["style"]
 
 
 def test_a_long_content_list_is_summarised_not_dumped():
@@ -716,10 +761,10 @@ def test_a_long_content_list_is_summarised_not_dumped():
     objs = _boxed(frame=[0, 0, 300, 300], **ids)
     inside = extract.find_contents(objs)["frame"]
     assert len(inside) == 8
-    clause = extract._exclusion_clause(inside)
+    clause = extract.exclusion_clause(inside)
     named = [i for i in ids if i.replace("_", " ") in clause]
     assert len(named) == extract.MAX_NAMED_CONTENTS
     assert "and 4 other elements" in clause
-    one_over = extract._exclusion_clause([f"thing_{i}" for i in range(5)])
+    one_over = extract.exclusion_clause([f"thing_{i}" for i in range(5)])
     assert "and 1 other element" in one_over and "1 other elements" not in one_over
 

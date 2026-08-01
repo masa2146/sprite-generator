@@ -75,6 +75,7 @@ def _record(pack, asset, status, cost=None, file=None, error=None):
 def build_one(pack, asset, reference_png):
     """Generate and post-process one asset. Returns a manifest record, never raises."""
     out_dir = pack.out_dir
+    style_png = None
     if asset.reference is not None:
         try:
             reference_png = asset.reference.read_bytes()
@@ -82,6 +83,19 @@ def build_one(pack, asset, reference_png):
             # Fail this asset only — the pack's other assets are unaffected.
             return _record(pack, asset, "failed",
                            error=f"cannot read reference {asset.reference}: {exc}")
+        # The pack's style image rides along as Image 2: the crop says what to
+        # draw, the screenshot says how it should look. Only when the asset
+        # brought its own crop — without one, reference_png is already the style
+        # bible and a second style image would say the same thing twice.
+        if pack.style_reference is not None:
+            try:
+                style_png = pack.style_reference.read_bytes()
+            except OSError as exc:
+                # full_prompt already promised the model an "Image 2", so
+                # sending one image against that prompt would be a lie.
+                return _record(pack, asset, "failed",
+                               error=f"cannot read [style] reference "
+                                     f"{pack.style_reference}: {exc}")
     try:
         png, cost, _raw = orclient.generate(
             pack,
@@ -89,6 +103,7 @@ def build_one(pack, asset, reference_png):
             aspect_ratio=asset.aspect_ratio,
             reference_png=reference_png,
             seed=pack.seed_for(asset.id),
+            style_png=style_png,
         )
     except orclient.ImageMissing as exc:
         try:
@@ -798,7 +813,18 @@ def cmd_extract(args):
         # cost the user the crops and the pack they already paid for.
         print(f"warning: contact sheet not written: {exc}", file=sys.stderr)
 
-    text = extract.pack_text(pack.model, pack.key_env, schema["style"], kept, refs_dir, pack_path)
+    # The screenshot itself becomes the pack's style reference — sent beside
+    # every crop at build time. Losing it is not fatal: the pack still builds,
+    # just from the style prefix's words alone.
+    style_copy = refs_dir / "_style.png"
+    try:
+        image.save(style_copy)
+    except OSError as exc:
+        print(f"warning: style reference not written: {exc}", file=sys.stderr)
+        style_copy = None
+
+    text = extract.pack_text(pack.model, pack.key_env, schema["style"], kept, refs_dir,
+                             pack_path, style_image=style_copy)
     try:
         pack_path.parent.mkdir(parents=True, exist_ok=True)
         pack_path.write_text(text, encoding="utf-8")

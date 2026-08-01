@@ -74,16 +74,19 @@ class _Stubs:
         self.prompts = []
         self.references = []
         self.aspect_ratios = []  # aspect_ratio passed into generate(), in call order
+        self.style_pngs = []  # style_png passed into generate(), in call order
         self.cut_calls = []   # bytes passed to post.cut_background, in call order
         self.trim_calls = []  # images passed to post.trim_and_pad, in call order
 
     def __enter__(self):
         self._orig = (cli.orclient.generate, cli.post.cut_background, cli.post.trim_and_pad)
 
-        def fake_generate(pack, prompt, aspect_ratio=None, reference_png=None, seed=None, **kw):
+        def fake_generate(pack, prompt, aspect_ratio=None, reference_png=None, seed=None,
+                          style_png=None, **kw):
             self.prompts.append(prompt)
             self.references.append(reference_png)
             self.aspect_ratios.append(aspect_ratio)
+            self.style_pngs.append(style_png)
             if isinstance(self.outcomes, dict):
                 outcome = next(
                     v for aid, v in self.outcomes.items() if pack.seed_for(aid) == seed
@@ -822,7 +825,7 @@ def test_analyze_writes_the_style_prefix():
     from spritegen import config
     reloaded = config.load_pack(spec, out_root=Path(tmp))
     btn_play = next(a for a in reloaded.assets if a.id == "btn_play")
-    assert reloaded.full_prompt(btn_play).startswith("soft 3D render, glossy plastic")
+    assert "ART STYLE  soft 3D render, glossy plastic" in reloaded.full_prompt(btn_play)
 
 
 def test_analyze_copies_the_image_as_the_style_bible():
@@ -974,6 +977,55 @@ def test_asset_reference_overrides_the_style_bible():
     with _Stubs({"btn_play": (b"A", 0.04)}) as stubs:
         cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
     assert stubs.references == [b"OWNREF"]      # not the style bible's b"BIBLE"
+
+
+def _spec_with_style_reference(tmp, ref_value="refs/_style.png"):
+    """A spec whose btn_play has its own crop AND whose [style] has a screenshot."""
+    spec = _spec_with_btn_play_reference(tmp, "refs/own.png")
+    spec.write_text(spec.read_text().replace(
+        "[style]", '[style]\nreference = "%s"' % ref_value, 1))
+    refs = spec.parent / "refs"
+    refs.mkdir(exist_ok=True)
+    (refs / "own.png").write_bytes(b"OWNREF")
+    return spec, refs
+
+
+def test_the_style_image_rides_along_with_an_assets_own_crop():
+    """Two images: the crop says what to draw, the screenshot says how it looks.
+    Text alone loses the palette."""
+    tmp = tempfile.mkdtemp()
+    spec, refs = _spec_with_style_reference(tmp)
+    (refs / "_style.png").write_bytes(b"SHOT")
+    with _Stubs({"btn_play": (b"A", 0.04)}) as stubs:
+        cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+    assert stubs.references == [b"OWNREF"]
+    assert stubs.style_pngs == [b"SHOT"]
+    assert "REFERENCES" in stubs.prompts[0]
+
+
+def test_no_style_image_is_sent_when_the_asset_has_no_crop_of_its_own():
+    """Without its own reference the asset already gets the style bible — a
+    second style image would say the same thing twice, and the prompt would
+    promise an Image 2 that means nothing."""
+    tmp = tempfile.mkdtemp()
+    spec, refs = _spec_with_style_reference(tmp)
+    (refs / "_style.png").write_bytes(b"SHOT")
+    with _Stubs({"icon_coin": (b"A", 0.04)}) as stubs:
+        cli.main(["build", str(spec), "--out-root", tmp, "--only", "icon_coin"])
+    assert stubs.style_pngs == [None]
+    assert "REFERENCES" not in stubs.prompts[0]
+
+
+def test_a_missing_style_reference_fails_the_asset_rather_than_lying():
+    """full_prompt has already promised the model an Image 2 by then."""
+    tmp = tempfile.mkdtemp()
+    spec, _refs = _spec_with_style_reference(tmp, "refs/gone.png")
+    with _Stubs({"btn_play": (b"A", 0.04)}) as stubs:
+        code = cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+    assert code == 1
+    assert stubs.prompts == []
+    records = {r["id"]: r for r in _manifest(tmp, "hc_v1")}
+    assert "[style] reference" in records["btn_play"]["error"]
 
 
 def test_a_missing_asset_reference_fails_only_that_asset():

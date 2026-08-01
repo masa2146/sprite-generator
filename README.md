@@ -171,11 +171,40 @@ the most valuable thing in this flow, and it refuses before spending the vision 
 `extract` writes them, but you can use the field by hand in any pack:
 
 ```toml
+[style]
+reference = "refs/_style.png"    # the whole set's look — sent as Image 2 with every asset
+
 [[assets]]
 id        = "coin_front"
 prompt    = "gold coin icon, thick rim, seen from directly the front"
 reference = "refs/coin.png"      # relative to the pack file; falls back to the style bible
+exclude   = "the coins stacked behind it"   # in the crop, not in the sprite
 ```
+
+`[style] reference` rides along as a second image beside an asset's own crop: the crop
+says *what* to draw, the screenshot says *how* it should look. Text alone loses the
+palette — the manual path measured a generic grey object from the version that sent no
+style image. It is sent only when the asset brought its own reference; without one the
+asset already gets the style bible, and a second style image would say the same thing
+twice. `exclude` is what the crop shows but the sprite must not have — `extract` fills it
+in for any object whose box swallows another.
+
+### The prompt `build` sends
+
+A sprite prompt is labelled blocks, not one sentence, because the clause a model skips is
+the one buried mid-sentence. Both paths compose the same blocks from the same strings in
+`config.py`:
+
+```
+REFERENCES     (only when two images go on the wire)
+OBJECT / FORM / DETAIL / VIEW      <- the asset's own prompt
+ART STYLE      <- [style] prefix
+OUTPUT         <- exactly one, centred, complete, flat #808080
+DO NOT DRAW    <- this asset's exclude, then the fixed bans
+```
+
+An asset with `cutout = false` is the whole image, so it gets prefix and prompt only —
+none of the single-subject blocks apply to a background or a seamless tile.
 
 ## Taking the same input to another model: `export`
 
@@ -233,7 +262,8 @@ The prompt is a structured block — `REFERENCES`, `OBJECT`, `FORM`, `DETAIL`,
 `VIEW`, `ART STYLE`, `OUTPUT`, `DO NOT DRAW`. Each block answers a failure
 measured on the paid path: unlabelled reference images, a missing "exactly one"
 that produced twelve balls, HUD labels that kept their text, and a frame whose
-crop showed everything it framed.
+crop showed everything it framed. `build` now sends the same blocks, from the
+same strings, so the two paths cannot drift apart.
 
 Backgrounds are flat `#808080` rather than transparent, so the download can be
 cut locally with `cut`. That grey was measured clean; `#FF00FF` bled colour
