@@ -1,11 +1,11 @@
-"""sprite brief tests. Run: python3 test_brief.py"""
+"""sprite brief tests. Run: python3 -m pytest tests/test_brief.py"""
 import json
 import tempfile
 from pathlib import Path
 
-import brief
-import extract
-import vision
+from spritegen import brief
+from spritegen import extract
+from spritegen import vision
 
 
 def _analysis(**overrides):
@@ -413,10 +413,3 @@ def test_an_unreadable_image_exits_one():
                            "--out-dir", str(Path(tmp) / "b")])
     assert code == 1
 
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all brief tests passed")

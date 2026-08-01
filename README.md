@@ -6,12 +6,22 @@ set visually consistent by sending a locked style-reference image with every req
 ## Install
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 export OPENROUTER_API_KEY=sk-...
 ```
 
 Python 3.11 or newer. The first run downloads the `birefnet-general` background
 removal weights to `~/.u2net/` (a few hundred MB, once).
+
+Every command below is a subcommand of one CLI. `python3 -m spritegen <command>`
+does the same thing without installing the console script.
+
+```
+spritegen/          the package: cli.py plus one module per concern
+tests/              one test file per module, no network
+packs/              your pack files (gitignored — they are yours, not the tool's)
+docs/               design notes, dated, kept as written
+```
 
 ## Use
 
@@ -20,18 +30,18 @@ instead. That writes the style prefix *and* locks the image as the style bible,
 saving the four style-plate generations:
 
 ```bash
-python3 gen.py analyze ref.png --pack packs/hc_v1.toml
+spritegen analyze ref.png --pack packs/hc_v1.toml
 ```
 
 ```bash
 # 1. Generate four candidate style plates and open them as a contact sheet
-python3 gen.py init packs/hc_v1.toml
+spritegen init packs/hc_v1.toml
 
 # 2. Lock the one you like as this pack's style bible
-python3 gen.py pick packs/hc_v1.toml 2
+spritegen pick packs/hc_v1.toml 2
 
 # 3. Generate everything
-python3 gen.py build packs/hc_v1.toml
+spritegen build packs/hc_v1.toml
 ```
 
 Output lands in `out/<pack>/`: one RGBA PNG per asset plus `manifest.json`.
@@ -50,10 +60,10 @@ Useful flags:
 No pack file. Give an image, a text, or both:
 
 ```bash
-python3 gen.py make -i ref.png                      # reproduce what's in the image
-python3 gen.py make -i ref.png -t "make it red"     # the text overrides the image
-python3 gen.py make -t "a glossy blue button"       # text only
-python3 gen.py make -i ref.png -n 3                 # three variants
+spritegen make -i ref.png                      # reproduce what's in the image
+spritegen make -i ref.png -t "make it red"     # the text overrides the image
+spritegen make -t "a glossy blue button"       # text only
+spritegen make -i ref.png -n 3                 # three variants
 ```
 
 With an image, it is analysed into nine fields — `subject`, `form`, `detail`, plus the six
@@ -80,7 +90,7 @@ backgrounds and tiles.
 a launcher, characters — `extract` pulls them apart:
 
 ```bash
-python3 gen.py extract -i screen.png --pack packs/bunny.toml
+spritegen extract -i screen.png --pack packs/bunny.toml
 ```
 
 One vision call returns the shared style plus an object list with bounding boxes. Each box
@@ -92,8 +102,8 @@ so you can check the crops against what they claim to be.
 **`extract` generates nothing.** It writes a pack; `build` does the generating:
 
 ```bash
-python3 gen.py build packs/bunny.toml --dry-run   # what it will cost
-python3 gen.py build packs/bunny.toml
+spritegen build packs/bunny.toml --dry-run   # what it will cost
+spritegen build packs/bunny.toml
 ```
 
 That split is deliberate: six objects at four views each is 24 images, on the order of $3.
@@ -112,7 +122,7 @@ predictable and the same command twice gives the same set. Assets are named
 ground truth about what exists and where:
 
 ```bash
-python3 gen.py extract -i screen.png --pack packs/bunny.toml \
+spritegen extract -i screen.png --pack packs/bunny.toml \
   -t "there is a conveyor in the middle; below the white blocks at its lower left is a
       dispenser, with a rounded-square object inside it"
 ```
@@ -177,7 +187,7 @@ packs you wrote or pruned by hand, and for re-making the file after editing one.
 goes to the image model and the exact prompt text that goes with it:
 
 ```bash
-python3 gen.py export packs/bunny.toml -o bunny_inputs.html
+spritegen export packs/bunny.toml -o bunny_inputs.html
 ```
 
 It generates nothing and costs nothing — it only restates what `build` would send, so you
@@ -189,7 +199,7 @@ mailed on its own.
 
 `--only` takes the same comma-separated asset ids as `build`.
 
-## Generating by hand: `brief.py`
+## Generating by hand: `spritegen brief`
 
 Generating a 17-asset set through the API cost roughly $1.8 and four of them
 came out unusable — the money is spent before the result can be judged. The
@@ -199,7 +209,7 @@ Ask Claude Code to use the `sprite-brief` skill with your screenshot and a
 description of what you want. It writes `analysis.json`, runs:
 
 ```bash
-python3 brief.py --image screen.png --analysis analysis.json --out-dir briefs/bunny
+spritegen brief --image screen.png --analysis analysis.json --out-dir briefs/bunny
 ```
 
 and leaves:
@@ -226,11 +236,31 @@ that produced twelve balls, HUD labels that kept their text, and a frame whose
 crop showed everything it framed.
 
 Backgrounds are flat `#808080` rather than transparent, so the download can be
-cut locally with `post.py`. That grey was measured clean; `#FF00FF` bled colour
+cut locally with `cut`. That grey was measured clean; `#FF00FF` bled colour
 into the alpha edges.
 
-`brief.py` refuses to overwrite an existing `brief.html` unless you re-run from
+`spritegen brief` refuses to overwrite an existing `brief.html` unless you re-run from
 that brief's own `analysis.json` — which is the review loop.
+
+## Cutting PNGs you already have: `cut`
+
+The counterpart to the manual flow: sprites generated by hand come back on a
+backdrop, and this strips it. Takes files or directories, writes each subject
+centred on a transparent square.
+
+```bash
+spritegen cut briefs/bunny/downloads --out-dir sprites/
+```
+
+Three ways to find the edge, because no single one handles every image:
+
+| flag | when |
+|---|---|
+| *(default)* | one subject on any backdrop — matting model |
+| `--key` | a sheet of objects on one flat colour — floods that colour in from the border, so a dark seam inside an object survives |
+| `--glow` | a soft additive effect with no hard edge — alpha comes from brightness |
+
+`--tol` (default 14) widens what `--key` counts as the background colour.
 
 ## Configuration
 
@@ -250,6 +280,8 @@ Unlike pack files — which hold the *name* of an env var and are meant to be sh
 | A consistent set of 30 assets | `build` with a pack |
 | Derive a pack's style from a reference | `analyze` |
 | Try the same input on another model | `export` |
+| Generate by hand, pay nothing per retry | `brief` |
+| Strip the backdrop off PNGs you already have | `cut` |
 
 ## Transport: `images` vs `chat`
 
@@ -293,7 +325,7 @@ than pretending the ceiling is active.
 ## Analysing a reference image
 
 ```bash
-python3 gen.py analyze <image> --pack <spec.toml> [--add-asset <id>] [--dry-run]
+spritegen analyze <image> --pack <spec.toml> [--add-asset <id>] [--dry-run]
 ```
 
 Sends the image to a vision model and extracts six style fields — render,
@@ -384,7 +416,7 @@ is not implemented.
 ## Tests
 
 ```bash
-python3 test_post.py && python3 test_config.py && python3 test_client.py && python3 test_build.py && python3 test_packwriter.py && python3 test_vision.py && python3 test_env.py && python3 test_make.py && python3 test_extract.py && python3 test_export.py && python3 test_brief.py
+python3 -m pytest
 ```
 
 No network, no rembg model download, runs in about a second.

@@ -1,11 +1,11 @@
-"""Spec parsing and precedence tests. Run: python3 test_config.py"""
+"""Spec parsing and precedence tests. Run: python3 -m pytest tests/test_config.py"""
 import os
 import tempfile
 from pathlib import Path
 
-import envfile
+from spritegen import envfile
 
-from config import (
+from spritegen.config import (
     BG_CLAUSE,
     DEFAULT_BASE_URL,
     DEFAULT_KEY_ENV,
@@ -417,7 +417,7 @@ def test_env_pack_reads_the_environment():
         "SPRITEGEN_VISION_MODEL": "env/vision",
     })
     try:
-        from config import env_pack
+        from spritegen.config import env_pack
         p = env_pack()
         assert p.base_url == "http://env/v1"
         assert p.model == "env/model"
@@ -432,7 +432,7 @@ def test_env_pack_falls_back_to_openrouter_api_key():
     _clear_env()
     os.environ.update({"SPRITEGEN_MODEL": "m", "OPENROUTER_API_KEY": "sk-legacy"})
     try:
-        from config import env_pack
+        from spritegen.config import env_pack
         assert env_pack().api_key() == "sk-legacy"
     finally:
         _clear_env()
@@ -446,7 +446,7 @@ def test_env_pack_vision_falls_back_to_the_main_endpoint_and_key():
         "SPRITEGEN_API_KEY": "sk-main",
     })
     try:
-        from config import env_pack
+        from spritegen.config import env_pack
         p = env_pack()
         assert p.vision_base_url == "http://main/v1"
         assert p.vision_api_key() == "sk-main"
@@ -459,7 +459,7 @@ def test_env_pack_cli_arguments_win():
     _clear_env()
     os.environ.update({"SPRITEGEN_MODEL": "env/model"})
     try:
-        from config import env_pack
+        from spritegen.config import env_pack
         p = env_pack(model="cli/model", base_url="http://cli/v1",
                      vision_model="cli/vision")
         assert p.model == "cli/model"
@@ -474,7 +474,7 @@ def test_env_pack_cli_arguments_win():
 
 def test_env_pack_without_a_model_is_an_error():
     _clear_env()
-    from config import env_pack
+    from spritegen.config import env_pack
     try:
         env_pack()
         raise AssertionError("expected SpecError")
@@ -486,7 +486,7 @@ def test_env_pack_rejects_an_invalid_transport():
     _clear_env()
     os.environ.update({"SPRITEGEN_MODEL": "m", "SPRITEGEN_TRANSPORT": "carrier-pigeon"})
     try:
-        from config import env_pack
+        from spritegen.config import env_pack
         env_pack()
         raise AssertionError("expected SpecError")
     except SpecError as exc:
@@ -499,7 +499,7 @@ def test_env_pack_defaults_transport_and_base_url():
     _clear_env()
     os.environ.update({"SPRITEGEN_MODEL": "m"})
     try:
-        from config import env_pack
+        from spritegen.config import env_pack
         p = env_pack()
         assert p.transport == DEFAULT_TRANSPORT
         assert p.base_url == DEFAULT_BASE_URL
@@ -516,7 +516,7 @@ def test_env_pack_ignores_a_dot_env_when_the_environment_is_explicit():
     envfile.DEFAULT_ENV_PATH = envpath
     os.environ["SPRITEGEN_MODEL"] = "from-environment"
     try:
-        from config import env_pack
+        from spritegen.config import env_pack
         assert env_pack().model == "from-environment"
     finally:
         _clear_env()
@@ -572,10 +572,3 @@ def test_reference_does_not_have_to_exist_at_load_time():
     pack = load_pack(_write(REF_SPEC))
     assert pack.assets[0].reference is not None      # no exception, no existence check
 
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all config tests passed")

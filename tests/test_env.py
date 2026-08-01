@@ -1,9 +1,9 @@
-"""`.env` loading tests. Run: python3 test_env.py"""
+"""`.env` loading tests. Run: python3 -m pytest tests/test_env.py"""
 import os
 import tempfile
 from pathlib import Path
 
-from envfile import load_env, parse_env
+from spritegen.envfile import load_env, parse_env
 
 SAMPLE = """# a comment
 SPRITEGEN_BASE_URL=https://openrouter.ai/api/v1
@@ -95,10 +95,3 @@ def test_unreadable_file_is_not_an_error():
     d = Path(tempfile.mkdtemp())
     assert load_env(d) == {}          # a directory, not a file
 
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all env tests passed")

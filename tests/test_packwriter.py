@@ -1,9 +1,9 @@
-"""TOML pack writer tests. Run: python3 test_packwriter.py"""
+"""TOML pack writer tests. Run: python3 -m pytest tests/test_packwriter.py"""
 import tempfile
 import tomllib
 from pathlib import Path
 
-from packwriter import PackWriteError, update_pack
+from spritegen.packwriter import PackWriteError, update_pack
 
 PACK = '''# Example pack: hyper-casual mobile game asset set.
 # Copy this file, change the ids and prompts, keep the structure.
@@ -163,7 +163,7 @@ def test_a_backup_file_is_left_behind():
 
 def test_file_is_restored_when_verification_fails(monkey=None):
     """If the written file does not re-parse, the original must come back."""
-    import packwriter
+    from spritegen import packwriter
     p = _pack_file()
     original = p.read_text()
     broken = packwriter._set_style_prefix
@@ -187,7 +187,7 @@ def test_restore_failure_after_a_bad_write_still_raises_pack_write_error():
     fails (e.g. disk full mid-write, so both writes hit the same failure), a
     bare OSError must not propagate in place of PackWriteError — that message
     is the only thing telling the user their file is recoverable from .bak."""
-    import packwriter
+    from spritegen import packwriter
     p = _pack_file()
     original = p.read_text()
     broken_write = Path.write_text
@@ -222,7 +222,7 @@ def test_no_op_call_is_rejected():
 
 def test_pack_write_failure_restores_file():
     """If path.write_text fails, the original file must be restored."""
-    import packwriter
+    from spritegen import packwriter
     p = _pack_file()
     original = p.read_text()
     broken_write = Path.write_text
@@ -274,10 +274,3 @@ def test_bracket_in_earlier_section_does_not_confuse_style_search():
     assert [a["id"] for a in d["assets"]] == ["btn_play", "bg_sky"]
     assert p.read_text().count("prefix =") == 1     # not two prefix keys
 
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all packwriter tests passed")

@@ -70,7 +70,7 @@ Rules:
 ### 3. Run the script
 
 ```bash
-python3 brief.py --image <screenshot> --analysis <analysis.json> \
+spritegen brief --image <screenshot> --analysis <analysis.json> \
                  --out-dir briefs/<name> --no-open
 ```
 
@@ -122,7 +122,7 @@ version that sent one matched the game's palette.
 ## What not to do
 
 - Do not generate or download images. This skill produces prompts and crops.
-- Do not write a TOML pack. That is `gen.py extract`'s job, on the paid path.
+- Do not write a TOML pack. That is `spritegen extract`'s job, on the paid path.
 - Do not invent objects the screenshot does not contain.
 - Do not silently drop anything — a rejected box, an unfound request, a
   question you decided not to ask.

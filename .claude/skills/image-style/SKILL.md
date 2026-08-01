@@ -8,7 +8,7 @@ description: Analyse a reference image into a fixed style schema — render, cam
 Read a reference image and describe it in a fixed schema, then turn that schema
 into two pieces of prompt text.
 
-This produces the same schema as `gen.py analyze` in the sprite_generator
+This produces the same schema as `spritegen analyze` in the sprite_generator
 project, so output from either can be used in place of the other. Unlike the
 CLI, this skill needs no API endpoint or key — you can see the image directly.
 
@@ -22,7 +22,7 @@ CLI, this skill needs no API endpoint or key — you can see the image directly.
 
 **Write nothing to disk and run no commands.** This skill only reads and
 reports. If the user wants the result written into a pack file, that is
-`gen.py analyze`'s job — tell them the command rather than editing the file
+`spritegen analyze`'s job — tell them the command rather than editing the file
 yourself.
 
 ## Schema
@@ -91,7 +91,7 @@ If the user asks for JSON, emit exactly this shape so it matches the CLI:
 To write the result into a pack instead of copying by hand:
 
 ```bash
-python3 gen.py analyze <image> --pack packs/<name>.toml
+spritegen analyze <image> --pack packs/<name>.toml
 ```
 
 That writes the `[style] prefix`, copies the image to

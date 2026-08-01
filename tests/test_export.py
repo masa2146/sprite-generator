@@ -1,12 +1,12 @@
-"""export mechanics tests. Run: python3 test_export.py"""
+"""export mechanics tests. Run: python3 -m pytest tests/test_export.py"""
 import tempfile
 from pathlib import Path
 
 from PIL import Image
 
-import config
-import export
-import orclient
+from spritegen import config
+from spritegen import export
+from spritegen import orclient
 
 
 def _pack(tmp, transport="images", reference=True):
@@ -75,10 +75,3 @@ def test_prompt_text_is_html_escaped():
         assert "<script>" not in html
         assert "&lt;script&gt;" in html
 
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all export tests passed")

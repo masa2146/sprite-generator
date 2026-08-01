@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+ (`tomllib` from stdlib), `requests`, `pillow`, `rembg[gpu]` (ships the `birefnet-general` session).
 
-**Spec:** `docs/superpowers/specs/2026-07-26-sprite-generator-design.md`
+**Spec:** `docs/specs/2026-07-26-sprite-generator-design.md`
 
 ## Global Constraints
 

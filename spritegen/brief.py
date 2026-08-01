@@ -24,8 +24,8 @@ from pathlib import Path
 
 from PIL import Image
 
-import extract
-import vision
+from . import extract
+from . import vision
 
 
 class BriefError(Exception):
@@ -237,7 +237,7 @@ def _load_image(image_path: Path):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        prog="brief.py",
+        prog="spritegen brief",
         description="Turn a screenshot and its analysis into crops and "
                     "paste-ready prompts for manual generation.",
     )
@@ -332,6 +332,3 @@ def main(argv=None) -> int:
         webbrowser.open(Path(sheet).resolve().as_uri())
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+, `requests`, `pillow`, `rembg[gpu]`. No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-07-28-one-shot-make-design.md`
+**Spec:** `docs/specs/2026-07-28-one-shot-make-design.md`
 
 ## Global Constraints
 

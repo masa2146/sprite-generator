@@ -1,4 +1,4 @@
-"""Build orchestration tests. No network, no rembg. Run: python3 test_build.py"""
+"""Build orchestration tests. No network, no rembg. Run: python3 -m pytest tests/test_build.py"""
 import base64
 import json
 import os
@@ -10,10 +10,10 @@ from pathlib import Path
 
 from PIL import Image
 
-import gen
-import orclient
-import post
-from config import Asset, Pack
+from spritegen import cli
+from spritegen import orclient
+from spritegen import post
+from spritegen.config import Asset, Pack
 
 
 def _png(color=(10, 20, 30)):
@@ -78,7 +78,7 @@ class _Stubs:
         self.trim_calls = []  # images passed to post.trim_and_pad, in call order
 
     def __enter__(self):
-        self._orig = (gen.orclient.generate, gen.post.cut_background, gen.post.trim_and_pad)
+        self._orig = (cli.orclient.generate, cli.post.cut_background, cli.post.trim_and_pad)
 
         def fake_generate(pack, prompt, aspect_ratio=None, reference_png=None, seed=None, **kw):
             self.prompts.append(prompt)
@@ -104,13 +104,13 @@ class _Stubs:
             self.trim_calls.append(img)
             return _Img(img.data, trimmed=True)
 
-        gen.orclient.generate = fake_generate
-        gen.post.cut_background = fake_cut
-        gen.post.trim_and_pad = fake_trim
+        cli.orclient.generate = fake_generate
+        cli.post.cut_background = fake_cut
+        cli.post.trim_and_pad = fake_trim
         return self
 
     def __exit__(self, *exc):
-        gen.orclient.generate, gen.post.cut_background, gen.post.trim_and_pad = self._orig
+        cli.orclient.generate, cli.post.cut_background, cli.post.trim_and_pad = self._orig
 
 
 class _Img:
@@ -130,14 +130,14 @@ def _manifest(tmp, name="t"):
 
 def test_select_assets_filters_by_only_and_preserves_spec_order():
     assets = [Asset(id=i, prompt="p") for i in ("a", "b", "c")]
-    assert [a.id for a in gen.select_assets(assets, None)] == ["a", "b", "c"]
-    assert [a.id for a in gen.select_assets(assets, "c,a")] == ["a", "c"]
+    assert [a.id for a in cli.select_assets(assets, None)] == ["a", "b", "c"]
+    assert [a.id for a in cli.select_assets(assets, "c,a")] == ["a", "c"]
 
 
 def test_select_assets_rejects_unknown_id():
     assets = [Asset(id="a", prompt="p")]
     try:
-        gen.select_assets(assets, "nope")
+        cli.select_assets(assets, "nope")
         raise AssertionError("expected SystemExit")
     except SystemExit as exc:
         assert "nope" in str(exc)
@@ -146,7 +146,7 @@ def test_select_assets_rejects_unknown_id():
 def test_dry_run_makes_no_requests():
     spec = _spec_file()
     with _Stubs([]) as stubs:
-        code = gen.main(["build", str(spec), "--dry-run"])
+        code = cli.main(["build", str(spec), "--dry-run"])
     assert code == 0
     assert stubs.prompts == []
 
@@ -155,7 +155,7 @@ def test_dry_run_works_without_a_style_bible():
     """--dry-run must not require init/pick to have been run."""
     spec = _spec_file()
     with _Stubs([]):
-        assert gen.main(["build", str(spec), "--dry-run"]) == 0
+        assert cli.main(["build", str(spec), "--dry-run"]) == 0
 
 
 def test_dry_run_shows_the_chat_transports_wire_prompt():
@@ -167,7 +167,7 @@ def test_dry_run_shows_the_chat_transports_wire_prompt():
     with _Stubs([]):
         buf = StringIO()
         with redirect_stdout(buf):
-            gen.main(["build", str(spec), "--dry-run"])
+            cli.main(["build", str(spec), "--dry-run"])
     assert "aspect ratio 1:1" in buf.getvalue()
 
 
@@ -178,7 +178,7 @@ def test_dry_run_shows_the_images_transports_structured_aspect_ratio():
     with _Stubs([]):
         buf = StringIO()
         with redirect_stdout(buf):
-            gen.main(["build", str(spec), "--dry-run"])
+            cli.main(["build", str(spec), "--dry-run"])
     out = buf.getvalue()
     assert "aspect_ratio=1:1" in out
     assert "aspect ratio 1:1" not in out
@@ -188,7 +188,7 @@ def test_build_without_style_bible_exits_with_error():
     spec = _spec_file()
     tmp = tempfile.mkdtemp()
     with _Stubs([]):
-        code = gen.main(["build", str(spec), "--out-root", tmp])
+        code = cli.main(["build", str(spec), "--out-root", tmp])
     assert code == 1
 
 
@@ -205,7 +205,7 @@ def test_build_writes_png_per_asset_and_a_manifest():
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
     with _Stubs([(b"A", 0.04), (b"B", 0.04), (b"C", 0.04)]) as stubs:
-        code = gen.main(["build", str(spec), "--out-root", tmp])
+        code = cli.main(["build", str(spec), "--out-root", tmp])
     assert code == 0
     out = Path(tmp) / "hc_v1"
     assert (out / "btn_play.png").exists()
@@ -224,7 +224,7 @@ def test_build_sends_style_bible_as_reference_on_every_request():
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
     with _Stubs([(b"A", 0.0), (b"B", 0.0), (b"C", 0.0)]) as stubs:
-        gen.main(["build", str(spec), "--out-root", tmp])
+        cli.main(["build", str(spec), "--out-root", tmp])
     assert stubs.references == [b"BIBLE", b"BIBLE", b"BIBLE"]
 
 
@@ -233,7 +233,7 @@ def test_build_skips_cutout_pipeline_when_asset_sets_cutout_false():
     spec = _prepare(tmp)
     outcomes = {"btn_play": (b"A", 0.0), "icon_coin": (b"B", 0.0), "bg_sky": (b"C", 0.0)}
     with _Stubs(outcomes) as stubs:
-        gen.main(["build", str(spec), "--out-root", tmp])
+        cli.main(["build", str(spec), "--out-root", tmp])
     out = Path(tmp) / "hc_v1"
     assert (out / "btn_play.png").read_bytes() == b"A-trimmed"
     assert (out / "bg_sky.png").read_bytes() == b"C"  # cutout = false: saved raw
@@ -252,7 +252,7 @@ def test_one_failing_asset_does_not_stop_the_others():
         "bg_sky": (b"C", 0.04),
     }
     with _Stubs(outcomes):
-        code = gen.main(["build", str(spec), "--out-root", tmp])
+        code = cli.main(["build", str(spec), "--out-root", tmp])
     assert code == 1  # non-zero because something failed
     records = {r["id"]: r for r in _manifest(tmp, "hc_v1")}
     assert records["btn_play"]["status"] == "ok"
@@ -270,7 +270,7 @@ def test_missing_image_in_response_writes_error_json():
         "bg_sky": (b"C", 0.0),
     }
     with _Stubs(outcomes):
-        gen.main(["build", str(spec), "--out-root", tmp])
+        cli.main(["build", str(spec), "--out-root", tmp])
     dumped = json.loads((Path(tmp) / "hc_v1" / "btn_play.error.json").read_text())
     assert dumped["choices"][0]["message"]["content"] == "refused"
 
@@ -283,8 +283,8 @@ def test_post_processing_failure_keeps_the_raw_png():
     with _Stubs(outcomes) as stubs:
         def boom(data):
             raise RuntimeError("shape error")
-        gen.post.cut_background = boom
-        gen.main(["build", str(spec), "--out-root", tmp])
+        cli.post.cut_background = boom
+        cli.main(["build", str(spec), "--out-root", tmp])
     assert (Path(tmp) / "hc_v1" / "btn_play.raw.png").read_bytes() == b"RAW"
     records = {r["id"]: r for r in _manifest(tmp, "hc_v1")}
     assert records["btn_play"]["status"] == "failed"
@@ -305,7 +305,7 @@ def test_error_json_write_failure_still_yields_a_failed_record():
     # was never created, so the write raises FileNotFoundError.
     asset = Asset(id="bad/nested", prompt="p")
     with _Stubs([orclient.ImageMissing({"choices": []})]):
-        rec = gen.build_one(pack, asset, b"BIBLE")
+        rec = cli.build_one(pack, asset, b"BIBLE")
     assert rec["status"] == "failed"
     assert "no image in response" in rec["error"]
     assert "failed to write" in rec["error"]
@@ -316,13 +316,13 @@ def test_budget_ceiling_stops_before_the_next_request():
     spec = _prepare(tmp)
     # The ceiling is checked between chunks, so force chunks of one to observe it
     # precisely. With WORKERS=4 all three assets would fit in a single chunk.
-    original_workers = gen.WORKERS
-    gen.WORKERS = 1
+    original_workers = cli.WORKERS
+    cli.WORKERS = 1
     try:
         with _Stubs([(b"A", 0.04), (b"B", 0.04), (b"C", 0.04)]) as stubs:
-            code = gen.main(["build", str(spec), "--out-root", tmp, "--max-cost", "0.05"])
+            code = cli.main(["build", str(spec), "--out-root", tmp, "--max-cost", "0.05"])
     finally:
-        gen.WORKERS = original_workers
+        cli.WORKERS = original_workers
     assert len(stubs.prompts) == 2  # spent 0.08 after two, third never requested
     records = _manifest(tmp, "hc_v1")
     assert len(records) == 2  # manifest still written for what did run
@@ -334,7 +334,7 @@ def test_missing_api_key_exits_before_any_request():
     spec = _prepare(tmp, SPEC.replace('key_env = ""', 'key_env = "ABSENT_KEY_VAR"'))
     os.environ.pop("ABSENT_KEY_VAR", None)
     with _Stubs([]) as stubs:
-        code = gen.main(["build", str(spec), "--out-root", tmp])
+        code = cli.main(["build", str(spec), "--out-root", tmp])
     assert code == 1
     assert stubs.prompts == []
 
@@ -343,14 +343,14 @@ def test_dry_run_does_not_require_an_api_key():
     spec = _spec_file(SPEC.replace('key_env = ""', 'key_env = "ABSENT_KEY_VAR"'))
     os.environ.pop("ABSENT_KEY_VAR", None)
     with _Stubs([]):
-        assert gen.main(["build", str(spec), "--dry-run"]) == 0
+        assert cli.main(["build", str(spec), "--dry-run"]) == 0
 
 
 def test_missing_cost_disables_the_ceiling_and_warns_once():
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
     with _Stubs([(b"A", None), (b"B", None), (b"C", None)]) as stubs:
-        code = gen.main(["build", str(spec), "--out-root", tmp, "--max-cost", "0.01"])
+        code = cli.main(["build", str(spec), "--out-root", tmp, "--max-cost", "0.01"])
     assert code == 0
     assert len(stubs.prompts) == 3  # ceiling could not be enforced, ran everything
     assert all(r["cost"] is None for r in _manifest(tmp, "hc_v1"))
@@ -363,14 +363,14 @@ def test_mixed_cost_reporting_keeps_ceiling_enforced_via_estimate():
     one (charged at EST_COST), then the ceiling must still bite."""
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
-    original_workers = gen.WORKERS
-    gen.WORKERS = 1
+    original_workers = cli.WORKERS
+    cli.WORKERS = 1
     try:
         outcomes = [(b"A", 0.04), (b"B", None), (b"C", 0.04)]
         with _Stubs(outcomes) as stubs:
-            code = gen.main(["build", str(spec), "--out-root", tmp, "--max-cost", "0.06"])
+            code = cli.main(["build", str(spec), "--out-root", tmp, "--max-cost", "0.06"])
     finally:
-        gen.WORKERS = original_workers
+        cli.WORKERS = original_workers
     # 0.04 (real) + 0.04 (EST_COST estimate for the missing one) = 0.08 >= 0.06:
     # the ceiling still stops the run, proving the latch didn't disable it.
     assert len(stubs.prompts) == 2
@@ -381,7 +381,7 @@ def test_only_flag_limits_the_build_to_named_assets():
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
     with _Stubs([(b"A", 0.04)]) as stubs:
-        gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+        cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
     assert len(stubs.prompts) == 1
     assert [r["id"] for r in _manifest(tmp, "hc_v1")] == ["btn_play"]
 
@@ -393,9 +393,9 @@ def test_only_run_preserves_other_ids_in_the_manifest():
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
     with _Stubs([(b"A", 0.04), (b"B", 0.04), (b"C", 0.04)]):
-        gen.main(["build", str(spec), "--out-root", tmp])
+        cli.main(["build", str(spec), "--out-root", tmp])
     with _Stubs([(b"A2", 0.04)]):
-        code = gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+        code = cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
     assert code == 0
     records = {r["id"]: r for r in _manifest(tmp, "hc_v1")}
     assert set(records) == {"btn_play", "icon_coin", "bg_sky"}  # nothing dropped
@@ -411,7 +411,7 @@ def test_only_run_falls_back_gracefully_when_the_existing_manifest_is_corrupt():
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text("{not valid json")
     with _Stubs([(b"A", 0.04)]):
-        code = gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+        code = cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
     assert code == 0  # a corrupt existing manifest must not crash the run
     assert [r["id"] for r in _manifest(tmp, "hc_v1")] == ["btn_play"]
 
@@ -420,7 +420,7 @@ def test_manifest_records_carry_full_provenance():
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
     with _Stubs([(b"A", 0.04), (b"B", 0.04), (b"C", 0.04)]):
-        gen.main(["build", str(spec), "--out-root", tmp])
+        cli.main(["build", str(spec), "--out-root", tmp])
     rec = _manifest(tmp, "hc_v1")[0]
     for key in ("id", "status", "prompt", "model", "base_url", "transport",
                 "aspect_ratio", "seed", "cost", "file", "error"):
@@ -435,7 +435,7 @@ def test_manifest_records_carry_full_provenance():
 
 def test_bad_spec_exits_cleanly_without_a_traceback():
     bad = _spec_file("[pack]\nmodel = 'm'\n")  # no assets
-    assert gen.main(["build", str(bad)]) == 1
+    assert cli.main(["build", str(bad)]) == 1
 
 
 # --- init / pick -----------------------------------------------------------
@@ -453,7 +453,7 @@ def test_init_generates_four_plates_and_a_contact_sheet():
     tmp = tempfile.mkdtemp()
     spec = _spec_file()
     with _Stubs(_plate_outcomes(0.04)) as stubs:
-        code = gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+        code = cli.main(["init", str(spec), "--out-root", tmp, "--no-open"])
     assert code == 0
     cand = Path(tmp) / "hc_v1" / "style_candidates"
     assert sorted(p.name for p in cand.glob("*.png")) == [
@@ -466,7 +466,7 @@ def test_init_sends_no_reference_and_uses_the_plate_prompt():
     tmp = tempfile.mkdtemp()
     spec = _spec_file()
     with _Stubs(_plate_outcomes()) as stubs:
-        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+        cli.main(["init", str(spec), "--out-root", tmp, "--no-open"])
     assert stubs.references == [None, None, None, None]
     assert all("a button, an icon, a character" in p for p in stubs.prompts)
     assert all("#808080" in p for p in stubs.prompts)
@@ -481,7 +481,7 @@ def test_init_uses_the_packs_default_aspect_ratio_not_hardcoded_1_1():
     tmp = tempfile.mkdtemp()
     spec = _spec_file(SPEC.replace("[style]", '[defaults]\naspect_ratio = "9:16"\n[style]'))
     with _Stubs(_plate_outcomes()) as stubs:
-        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+        cli.main(["init", str(spec), "--out-root", tmp, "--no-open"])
     assert stubs.aspect_ratios == ["9:16", "9:16", "9:16", "9:16"]
 
 
@@ -489,7 +489,7 @@ def test_init_plates_are_saved_raw_without_background_removal():
     tmp = tempfile.mkdtemp()
     spec = _spec_file()
     with _Stubs(_plate_outcomes()):
-        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+        cli.main(["init", str(spec), "--out-root", tmp, "--no-open"])
     saved = (Path(tmp) / "hc_v1" / "style_candidates" / "0.png").read_bytes()
     assert saved == PLATES[0]  # byte-identical: nothing was post-processed
 
@@ -498,7 +498,7 @@ def test_init_respects_the_cost_ceiling():
     tmp = tempfile.mkdtemp()
     spec = _spec_file()
     with _Stubs(_plate_outcomes(0.04, count=2)) as stubs:
-        code = gen.main(["init", str(spec), "--out-root", tmp, "--no-open",
+        code = cli.main(["init", str(spec), "--out-root", tmp, "--no-open",
                          "--max-cost", "0.05"])
     assert len(stubs.prompts) == 2  # spent 0.08 after two, third never requested
     assert code == 0
@@ -514,7 +514,7 @@ def test_init_survives_a_mid_sequence_plate_failure_and_stays_in_sync():
     spec = _spec_file()
     outcomes = [(PLATES[0], 0.0), ConnectionError("boom"), (PLATES[2], 0.0), (PLATES[3], 0.0)]
     with _Stubs(outcomes) as stubs:
-        code = gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+        code = cli.main(["init", str(spec), "--out-root", tmp, "--no-open"])
     assert code == 0
     assert len(stubs.prompts) == 4  # all four plates were attempted
 
@@ -539,8 +539,8 @@ def test_pick_copies_the_chosen_candidate_to_style_bible():
     tmp = tempfile.mkdtemp()
     spec = _spec_file()
     with _Stubs(_plate_outcomes()):
-        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
-    assert gen.main(["pick", str(spec), "2", "--out-root", tmp]) == 0
+        cli.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+    assert cli.main(["pick", str(spec), "2", "--out-root", tmp]) == 0
     assert (Path(tmp) / "hc_v1" / "style_bible.png").read_bytes() == PLATES[2]
 
 
@@ -548,13 +548,13 @@ def test_pick_rejects_an_out_of_range_index():
     tmp = tempfile.mkdtemp()
     spec = _spec_file()
     with _Stubs(_plate_outcomes()):
-        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
-    assert gen.main(["pick", str(spec), "9", "--out-root", tmp]) == 1
+        cli.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+    assert cli.main(["pick", str(spec), "9", "--out-root", tmp]) == 1
 
 
 def test_pick_without_init_exits_with_error():
     tmp = tempfile.mkdtemp()
-    assert gen.main(["pick", str(_spec_file()), "0", "--out-root", tmp]) == 1
+    assert cli.main(["pick", str(_spec_file()), "0", "--out-root", tmp]) == 1
 
 
 def test_pick_style_bible_path_blocked_reports_an_error_not_a_traceback():
@@ -564,10 +564,10 @@ def test_pick_style_bible_path_blocked_reports_an_error_not_a_traceback():
     tmp = tempfile.mkdtemp()
     spec = _spec_file()
     with _Stubs(_plate_outcomes()):
-        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+        cli.main(["init", str(spec), "--out-root", tmp, "--no-open"])
     style_bible = Path(tmp) / "hc_v1" / "style_bible.png"
     style_bible.mkdir()  # a directory where pick needs to write a file
-    assert gen.main(["pick", str(spec), "0", "--out-root", tmp]) == 1
+    assert cli.main(["pick", str(spec), "0", "--out-root", tmp]) == 1
 
 
 def test_build_runs_after_init_and_pick():
@@ -575,10 +575,10 @@ def test_build_runs_after_init_and_pick():
     tmp = tempfile.mkdtemp()
     spec = _spec_file()
     with _Stubs(_plate_outcomes()):
-        gen.main(["init", str(spec), "--out-root", tmp, "--no-open"])
-    gen.main(["pick", str(spec), "1", "--out-root", tmp])
+        cli.main(["init", str(spec), "--out-root", tmp, "--no-open"])
+    cli.main(["pick", str(spec), "1", "--out-root", tmp])
     with _Stubs([(b"A", 0.0), (b"B", 0.0), (b"C", 0.0)]) as stubs:
-        code = gen.main(["build", str(spec), "--out-root", tmp])
+        code = cli.main(["build", str(spec), "--out-root", tmp])
     assert code == 0
     assert stubs.references == [PLATES[1], PLATES[1], PLATES[1]]
 
@@ -590,7 +590,7 @@ def test_contact_sheet_is_a_two_by_two_grid():
         p = tmp / f"{i}.png"
         Image.new("RGB", (100, 100), (i * 60, 0, 0)).save(p)
         paths.append(p)
-    sheet = gen.contact_sheet(paths, tmp / "sheet.png")
+    sheet = cli.contact_sheet(paths, tmp / "sheet.png")
     with Image.open(sheet) as img:
         assert img.size == (200, 200)
 
@@ -603,7 +603,7 @@ def test_contact_sheet_handles_fewer_than_four_plates():
         p = tmp / f"{i}.png"
         Image.new("RGB", (100, 100), (0, i * 60, 0)).save(p)
         paths.append(p)
-    sheet = gen.contact_sheet(paths, tmp / "sheet.png")
+    sheet = cli.contact_sheet(paths, tmp / "sheet.png")
     with Image.open(sheet) as img:
         assert img.size == (200, 200)
 
@@ -651,7 +651,7 @@ def test_real_generate_and_trim_and_pad_run_end_to_end_through_build():
     # trim_and_pad (real, unstubbed) still has real alpha geometry to crop.
     post.cut_background = lambda data: Image.open(BytesIO(data)).convert("RGBA")
     try:
-        code = gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+        code = cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
     finally:
         orclient.requests.post = original_post
         post.cut_background = original_cut
@@ -691,7 +691,7 @@ cutout = false
 
 def test_real_generate_through_build_on_images_transport_posts_aspect_ratio():
     """Finding 2: the images transport is the default real users get, and
-    aspect_ratio wiring through gen.py had zero coverage on it — every other
+    aspect_ratio wiring through cli.py had zero coverage on it — every other
     test in this file stubs orclient.generate directly, and the one real-seam
     test (above) only exercises transport = "chat". Mirrors that test but on
     the images transport, with an images-shaped fake response, and asserts the
@@ -724,7 +724,7 @@ def test_real_generate_through_build_on_images_transport_posts_aspect_ratio():
     orclient.requests.post = fake_post
     post.cut_background = lambda data: Image.open(BytesIO(data)).convert("RGBA")
     try:
-        code = gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+        code = cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
     finally:
         orclient.requests.post = original_post
         post.cut_background = original_cut
@@ -767,7 +767,7 @@ class _VisionStub:
         self.images = []
 
     def __enter__(self):
-        self._orig = gen.vision.analyze
+        self._orig = cli.vision.analyze
 
         def fake(pack, image_bytes, **kw):
             self.images.append(image_bytes)
@@ -775,11 +775,11 @@ class _VisionStub:
                 raise self.error
             return self.result, json.dumps(self.result)
 
-        gen.vision.analyze = fake
+        cli.vision.analyze = fake
         return self
 
     def __exit__(self, *exc):
-        gen.vision.analyze = self._orig
+        cli.vision.analyze = self._orig
 
 
 def _analyze_pack(tmp, text=SPEC):
@@ -795,7 +795,7 @@ def test_analyze_dry_run_writes_nothing():
     spec, img = _analyze_pack(tmp)
     before = spec.read_text()
     with _VisionStub(result=ANALYSIS_SCHEMA):
-        code = gen.main(["analyze", str(img), "--pack", str(spec),
+        code = cli.main(["analyze", str(img), "--pack", str(spec),
                          "--out-root", tmp, "--dry-run"])
     assert code == 0
     assert spec.read_text() == before
@@ -806,7 +806,7 @@ def test_analyze_writes_the_style_prefix():
     tmp = tempfile.mkdtemp()
     spec, img = _analyze_pack(tmp)
     with _VisionStub(result=ANALYSIS_SCHEMA):
-        code = gen.main(["analyze", str(img), "--pack", str(spec), "--out-root", tmp])
+        code = cli.main(["analyze", str(img), "--pack", str(spec), "--out-root", tmp])
     assert code == 0
     import tomllib
     with open(spec, "rb") as fh:
@@ -819,7 +819,7 @@ def test_analyze_writes_the_style_prefix():
     # otherwise stubs the pack-file -> load_pack -> full_prompt path away, which
     # is exactly how the --add-asset bug (frozen prefix baked into one asset's
     # own prompt) went unnoticed — this closes that seam.
-    import config
+    from spritegen import config
     reloaded = config.load_pack(spec, out_root=Path(tmp))
     btn_play = next(a for a in reloaded.assets if a.id == "btn_play")
     assert reloaded.full_prompt(btn_play).startswith("soft 3D render, glossy plastic")
@@ -829,7 +829,7 @@ def test_analyze_copies_the_image_as_the_style_bible():
     tmp = tempfile.mkdtemp()
     spec, img = _analyze_pack(tmp)
     with _VisionStub(result=ANALYSIS_SCHEMA):
-        gen.main(["analyze", str(img), "--pack", str(spec), "--out-root", tmp])
+        cli.main(["analyze", str(img), "--pack", str(spec), "--out-root", tmp])
     bible = Path(tmp) / "hc_v1" / "style_bible.png"
     assert bible.read_bytes() == img.read_bytes()
 
@@ -845,7 +845,7 @@ def test_analyze_style_bible_write_failure_reports_the_partial_state():
     blocker = Path(tmp) / "blocker"
     blocker.write_text("not a directory")
     with _VisionStub(result=ANALYSIS_SCHEMA):
-        code = gen.main(["analyze", str(img), "--pack", str(spec),
+        code = cli.main(["analyze", str(img), "--pack", str(spec),
                          "--out-root", str(blocker)])
     assert code == 1
     import tomllib
@@ -868,7 +868,7 @@ def test_analyze_add_asset_appends_the_subject():
     tmp = tempfile.mkdtemp()
     spec, img = _analyze_pack(tmp)
     with _VisionStub(result=ANALYSIS_SCHEMA):
-        code = gen.main(["analyze", str(img), "--pack", str(spec),
+        code = cli.main(["analyze", str(img), "--pack", str(spec),
                          "--out-root", tmp, "--add-asset", "coin_ref"])
     assert code == 0
     import tomllib
@@ -892,7 +892,7 @@ def test_analyze_without_add_asset_leaves_assets_alone():
     with open(spec, "rb") as fh:
         before = len(tomllib.load(fh)["assets"])
     with _VisionStub(result=ANALYSIS_SCHEMA):
-        gen.main(["analyze", str(img), "--pack", str(spec), "--out-root", tmp])
+        cli.main(["analyze", str(img), "--pack", str(spec), "--out-root", tmp])
     with open(spec, "rb") as fh:
         assert len(tomllib.load(fh)["assets"]) == before
 
@@ -902,7 +902,7 @@ def test_analyze_duplicate_asset_id_fails_without_writing():
     spec, img = _analyze_pack(tmp)
     before = spec.read_text()
     with _VisionStub(result=ANALYSIS_SCHEMA):
-        code = gen.main(["analyze", str(img), "--pack", str(spec),
+        code = cli.main(["analyze", str(img), "--pack", str(spec),
                          "--out-root", tmp, "--add-asset", "btn_play"])
     assert code == 1
     assert spec.read_text() == before
@@ -912,7 +912,7 @@ def test_analyze_missing_image_exits_cleanly():
     tmp = tempfile.mkdtemp()
     spec, _ = _analyze_pack(tmp)
     with _VisionStub(result=ANALYSIS_SCHEMA):
-        code = gen.main(["analyze", str(Path(tmp) / "nope.png"),
+        code = cli.main(["analyze", str(Path(tmp) / "nope.png"),
                          "--pack", str(spec), "--out-root", tmp])
     assert code == 1
 
@@ -927,7 +927,7 @@ def test_analyze_missing_vision_key_exits_before_any_request():
     )
     os.environ.pop("ABSENT_VISION_KEY", None)
     with _VisionStub(result=ANALYSIS_SCHEMA) as stub:
-        code = gen.main(["analyze", str(img), "--pack", str(spec),
+        code = cli.main(["analyze", str(img), "--pack", str(spec),
                          "--out-root", tmp, "--vision-model", "v/model"])
     assert code == 1
     assert stub.images == []  # no request was made
@@ -937,10 +937,10 @@ def test_analyze_failure_writes_the_raw_reply_and_leaves_the_pack_alone():
     tmp = tempfile.mkdtemp()
     spec, img = _analyze_pack(tmp)
     before = spec.read_text()
-    err = gen.vision.AnalysisError("no JSON object found in the reply",
+    err = cli.vision.AnalysisError("no JSON object found in the reply",
                                    raw="I cannot analyze this image.")
     with _VisionStub(error=err):
-        code = gen.main(["analyze", str(img), "--pack", str(spec), "--out-root", tmp])
+        code = cli.main(["analyze", str(img), "--pack", str(spec), "--out-root", tmp])
     assert code == 1
     assert spec.read_text() == before
     dump = img.with_suffix(".png.analysis-error.txt")
@@ -972,7 +972,7 @@ def test_asset_reference_overrides_the_style_bible():
     refs.mkdir(exist_ok=True)
     (refs / "own.png").write_bytes(b"OWNREF")
     with _Stubs({"btn_play": (b"A", 0.04)}) as stubs:
-        gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+        cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
     assert stubs.references == [b"OWNREF"]      # not the style bible's b"BIBLE"
 
 
@@ -980,17 +980,10 @@ def test_a_missing_asset_reference_fails_only_that_asset():
     tmp = tempfile.mkdtemp()
     spec = _spec_with_btn_play_reference(tmp, "refs/nope.png")
     with _Stubs({"btn_play": (b"A", 0.04)}) as stubs:
-        code = gen.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+        code = cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
     assert code == 1
     assert stubs.prompts == []                # never reached the generator
     records = {r["id"]: r for r in _manifest(tmp, "hc_v1")}
     assert records["btn_play"]["status"] == "failed"
     assert "reference" in records["btn_play"]["error"]
 
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all build tests passed")

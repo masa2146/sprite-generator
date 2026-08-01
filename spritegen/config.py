@@ -9,7 +9,7 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import envfile
+from . import envfile
 
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_KEY_ENV = "OPENROUTER_API_KEY"

@@ -1,12 +1,12 @@
-"""Vision analysis tests. No network is touched. Run: python3 test_vision.py"""
+"""Vision analysis tests. No network is touched. Run: python3 -m pytest tests/test_vision.py"""
 import base64
 import json
 import os
 import tempfile
 from pathlib import Path
 
-import vision
-from config import Pack
+from spritegen import vision
+from spritegen.config import Pack
 
 SCHEMA = {
     "style": {
@@ -57,7 +57,7 @@ class _Recorder:
 
 
 def _run_analyze(responses, pack=None):
-    import orclient
+    from spritegen import orclient
     rec = _Recorder(responses)
     original = orclient.requests.post
     orclient.requests.post = rec
@@ -288,7 +288,7 @@ def test_analyze_without_user_text_sends_no_override_clause():
 
 
 def test_analyze_with_user_text_appends_the_override_clause():
-    import orclient
+    from spritegen import orclient
     rec = _Recorder([_Resp(200, _body(json.dumps(FULL)))])
     original = orclient.requests.post
     orclient.requests.post = rec
@@ -416,7 +416,7 @@ def test_analyze_objects_rejects_a_reply_with_no_style():
 
 
 def _run_objects(responses, pack=None):
-    import orclient
+    from spritegen import orclient
     rec = _Recorder(responses)
     original = orclient.requests.post
     orclient.requests.post = rec
@@ -441,7 +441,7 @@ def test_style_prefix_skips_a_non_string_field_instead_of_crashing():
 def test_user_text_is_appended_as_ground_truth_for_objects():
     """The user knows the game; a described object must reach the model as
     something it has to find, not as an optional hint."""
-    import orclient
+    from spritegen import orclient
     rec = _Recorder([_Resp(200, _body(json.dumps(OBJECTS_REPLY)))])
     original = orclient.requests.post
     orclient.requests.post = rec
@@ -469,10 +469,3 @@ def test_vision_calls_pin_the_temperature():
     (_s2, _r2), rec2 = _run_analyze([_Resp(200, _body(json.dumps(SCHEMA)))])
     assert rec2.calls[0]["json"]["temperature"] == 0
 
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all vision tests passed")

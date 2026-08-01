@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-import post
+from . import post
 
 
 def key_background(data: bytes, tol: float = 14.0) -> Image.Image:
@@ -81,7 +81,7 @@ def iter_pngs(paths):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        prog="cutout.py",
+        prog="spritegen cut",
         description="Remove the background from PNGs and centre each subject "
                     "on a transparent square.",
     )
@@ -126,6 +126,3 @@ def main(argv=None) -> int:
 
     return 0
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())

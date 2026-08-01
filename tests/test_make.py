@@ -1,4 +1,4 @@
-"""`make` command tests. No network, no rembg. Run: python3 test_make.py"""
+"""`make` command tests. No network, no rembg. Run: python3 -m pytest tests/test_make.py"""
 import base64
 import json
 import os
@@ -9,9 +9,9 @@ from pathlib import Path
 
 from PIL import Image
 
-import gen
-import orclient
-import post
+from spritegen import cli
+from spritegen import orclient
+from spritegen import post
 
 
 def _png(color=(10, 20, 30)):
@@ -61,11 +61,11 @@ class _Stubs:
         self.trim_calls = 0
 
     def __enter__(self):
-        self._orig = (gen.vision.analyze, gen.orclient.generate,
-                      gen.post.cut_background, gen.post.trim_and_pad)
+        self._orig = (cli.vision.analyze, cli.orclient.generate,
+                      cli.post.cut_background, cli.post.trim_and_pad)
         # A real .env in the project root would silently fill variables these
         # tests deliberately leave empty, so point the loader at nothing.
-        import envfile
+        from spritegen import envfile
         self._orig_env_path = envfile.DEFAULT_ENV_PATH
         envfile.DEFAULT_ENV_PATH = Path(tempfile.mkdtemp()) / "absent.env"
 
@@ -94,16 +94,16 @@ class _Stubs:
             self.trim_calls += 1
             return _Img(img.data, trimmed=True)
 
-        gen.vision.analyze = fake_analyze
-        gen.orclient.generate = fake_generate
-        gen.post.cut_background = fake_cut
-        gen.post.trim_and_pad = fake_trim
+        cli.vision.analyze = fake_analyze
+        cli.orclient.generate = fake_generate
+        cli.post.cut_background = fake_cut
+        cli.post.trim_and_pad = fake_trim
         return self
 
     def __exit__(self, *exc):
-        (gen.vision.analyze, gen.orclient.generate,
-         gen.post.cut_background, gen.post.trim_and_pad) = self._orig
-        import envfile
+        (cli.vision.analyze, cli.orclient.generate,
+         cli.post.cut_background, cli.post.trim_and_pad) = self._orig
+        from spritegen import envfile
         envfile.DEFAULT_ENV_PATH = self._orig_env_path
 
 
@@ -130,16 +130,16 @@ def _image_file(tmp):
 # --- slug -------------------------------------------------------------------
 
 def test_slugify_lowercases_and_replaces_runs():
-    assert gen.slugify("A Small Launcher Chute!") == "a-small-launcher-chute"
+    assert cli.slugify("A Small Launcher Chute!") == "a-small-launcher-chute"
 
 
 def test_slugify_truncates_and_has_no_trailing_dash():
-    s = gen.slugify("x" * 80)
+    s = cli.slugify("x" * 80)
     assert len(s) <= 40 and not s.endswith("-")
 
 
 def test_slugify_falls_back_when_nothing_survives():
-    assert gen.slugify("!!!") == "sprite"
+    assert cli.slugify("!!!") == "sprite"
 
 
 # --- input validation -------------------------------------------------------
@@ -148,7 +148,7 @@ def test_neither_image_nor_text_is_an_error():
     tmp = tempfile.mkdtemp(); _env()
     try:
         with _Stubs() as s:
-            assert gen.main(["make", "--out-root", tmp]) == 1
+            assert cli.main(["make", "--out-root", tmp]) == 1
             assert s.analyze_calls == []
             assert s.prompts == []
     finally:
@@ -159,7 +159,7 @@ def test_text_only_makes_no_vision_call():
     tmp = tempfile.mkdtemp(); _env()
     try:
         with _Stubs() as s:
-            code = gen.main(["make", "-t", "a glossy blue button", "--out-root", tmp])
+            code = cli.main(["make", "-t", "a glossy blue button", "--out-root", tmp])
         assert code == 0
         assert s.analyze_calls == []                 # nothing to analyse, nothing to pay for
         assert "a glossy blue button" in s.prompts[0]
@@ -173,7 +173,7 @@ def test_image_only_analyses_without_user_text():
     img = _image_file(tmp)
     try:
         with _Stubs() as s:
-            code = gen.main(["make", "-i", str(img), "--out-root", tmp])
+            code = cli.main(["make", "-i", str(img), "--out-root", tmp])
         assert code == 0
         assert len(s.analyze_calls) == 1
         assert s.analyze_calls[0]["user_text"] is None
@@ -187,7 +187,7 @@ def test_image_plus_text_passes_the_text_to_analyze():
     img = _image_file(tmp)
     try:
         with _Stubs() as s:
-            gen.main(["make", "-i", str(img), "-t", "make it red", "--out-root", tmp])
+            cli.main(["make", "-i", str(img), "-t", "make it red", "--out-root", tmp])
         assert s.analyze_calls[0]["user_text"] == "make it red"
     finally:
         _clear()
@@ -197,7 +197,7 @@ def test_missing_image_file_exits_cleanly():
     tmp = tempfile.mkdtemp(); _env()
     try:
         with _Stubs() as s:
-            code = gen.main(["make", "-i", str(Path(tmp) / "nope.png"),
+            code = cli.main(["make", "-i", str(Path(tmp) / "nope.png"),
                              "--out-root", tmp])
         assert code == 1
         assert s.prompts == []
@@ -212,7 +212,7 @@ def test_the_image_is_sent_as_a_generation_reference():
     img = _image_file(tmp)
     try:
         with _Stubs() as s:
-            gen.main(["make", "-i", str(img), "--out-root", tmp])
+            cli.main(["make", "-i", str(img), "--out-root", tmp])
         assert s.references[0] == img.read_bytes()
     finally:
         _clear()
@@ -222,7 +222,7 @@ def test_backdrop_clause_is_appended_by_default():
     tmp = tempfile.mkdtemp(); _env()
     try:
         with _Stubs() as s:
-            gen.main(["make", "-t", "a coin", "--out-root", tmp])
+            cli.main(["make", "-t", "a coin", "--out-root", tmp])
         assert "#808080" in s.prompts[0]
     finally:
         _clear()
@@ -232,7 +232,7 @@ def test_no_cutout_skips_backdrop_and_post_processing():
     tmp = tempfile.mkdtemp(); _env()
     try:
         with _Stubs() as s:
-            gen.main(["make", "-t", "a seamless sky", "--no-cutout", "--out-root", tmp])
+            cli.main(["make", "-t", "a seamless sky", "--no-cutout", "--out-root", tmp])
         assert "#808080" not in s.prompts[0]
         assert s.cut_calls == 0 and s.trim_calls == 0
     finally:
@@ -246,7 +246,7 @@ def test_output_png_and_sidecar_are_written():
     img = _image_file(tmp)
     try:
         with _Stubs():
-            gen.main(["make", "-i", str(img), "--out-root", tmp])
+            cli.main(["make", "-i", str(img), "--out-root", tmp])
         pngs = list((Path(tmp) / "make").glob("*.png"))
         jsons = list((Path(tmp) / "make").glob("*.json"))
         assert len(pngs) == 1 and len(jsons) == 1
@@ -264,7 +264,7 @@ def test_filename_carries_the_subject_slug():
     img = _image_file(tmp)
     try:
         with _Stubs():
-            gen.main(["make", "-i", str(img), "--out-root", tmp])
+            cli.main(["make", "-i", str(img), "--out-root", tmp])
         name = next((Path(tmp) / "make").glob("*.png")).name
         assert "launcher" in name
     finally:
@@ -275,7 +275,7 @@ def test_n_variants_write_n_files_with_distinct_seeds():
     tmp = tempfile.mkdtemp(); _env()
     try:
         with _Stubs(outcomes=[(b"A", 0.05), (b"B", 0.05), (b"C", 0.05)]) as s:
-            code = gen.main(["make", "-t", "a coin", "-n", "3", "--out-root", tmp])
+            code = cli.main(["make", "-t", "a coin", "-n", "3", "--out-root", tmp])
         assert code == 0
         assert len(list((Path(tmp) / "make").glob("*.png"))) == 3
         assert len(set(s.seeds)) == 3
@@ -288,7 +288,7 @@ def test_dry_run_writes_nothing_and_makes_no_image_request():
     img = _image_file(tmp)
     try:
         with _Stubs() as s:
-            code = gen.main(["make", "-i", str(img), "--dry-run", "--out-root", tmp])
+            code = cli.main(["make", "-i", str(img), "--dry-run", "--out-root", tmp])
         assert code == 0
         assert s.prompts == []                       # no generation
         assert not (Path(tmp) / "make").exists()     # not even a directory
@@ -301,10 +301,10 @@ def test_dry_run_writes_nothing_and_makes_no_image_request():
 def test_analysis_failure_exits_one_and_generates_nothing():
     tmp = tempfile.mkdtemp(); _env()
     img = _image_file(tmp)
-    err = gen.vision.AnalysisError("no JSON object found in the reply", raw="nope")
+    err = cli.vision.AnalysisError("no JSON object found in the reply", raw="nope")
     try:
         with _Stubs(analyze_error=err) as s:
-            code = gen.main(["make", "-i", str(img), "--out-root", tmp])
+            code = cli.main(["make", "-i", str(img), "--out-root", tmp])
         assert code == 1
         assert s.prompts == []
         assert (img.parent / "ref.png.analysis-error.txt").read_text() == "nope"
@@ -314,11 +314,11 @@ def test_analysis_failure_exits_one_and_generates_nothing():
 
 def test_one_failed_variant_still_writes_the_others():
     tmp = tempfile.mkdtemp(); _env()
-    import orclient
+    from spritegen import orclient
     outcomes = [(b"A", 0.05), orclient.ApiError("HTTP 429", 429), (b"C", 0.05)]
     try:
         with _Stubs(outcomes=outcomes):
-            code = gen.main(["make", "-t", "a coin", "-n", "3", "--out-root", tmp])
+            code = cli.main(["make", "-t", "a coin", "-n", "3", "--out-root", tmp])
         assert code == 1                                            # something failed
         assert len(list((Path(tmp) / "make").glob("*.png"))) == 2    # the rest survived
     finally:
@@ -331,7 +331,7 @@ def test_missing_image_model_exits_cleanly():
     os.environ["SPRITEGEN_VISION_MODEL"] = "vis/model"
     try:
         with _Stubs() as s:
-            code = gen.main(["make", "-t", "a coin", "--out-root", tmp])
+            code = cli.main(["make", "-t", "a coin", "--out-root", tmp])
         assert code == 1
         assert s.prompts == []
     finally:
@@ -346,7 +346,7 @@ def test_blank_text_and_no_image_is_an_error():
     tmp = tempfile.mkdtemp(); _env()
     try:
         with _Stubs() as s:
-            code = gen.main(["make", "-t", "   ", "--out-root", tmp])
+            code = cli.main(["make", "-t", "   ", "--out-root", tmp])
         assert code == 1
         assert s.prompts == []
     finally:
@@ -362,7 +362,7 @@ def test_missing_api_key_exits_before_any_request():
     os.environ["SPRITEGEN_MODEL"] = "img/model"
     try:
         with _Stubs() as s:
-            code = gen.main(["make", "-t", "a coin", "--out-root", tmp])
+            code = cli.main(["make", "-t", "a coin", "--out-root", tmp])
         assert code == 1
         assert s.prompts == []
     finally:
@@ -376,7 +376,7 @@ def test_missing_vision_key_exits_before_any_request_when_image_given():
     check already required to be set) — so this exercises cmd_make's guard
     directly against a hand-built Pack, the way it would matter if env_pack's
     fallback ever decoupled the two keys."""
-    from config import Pack
+    from spritegen.config import Pack
     tmp = tempfile.mkdtemp()
     img = _image_file(tmp)
     fake_pack = Pack(
@@ -387,15 +387,15 @@ def test_missing_vision_key_exits_before_any_request_when_image_given():
     )
     os.environ.pop("ABSENT_VISION_KEY_VAR", None)
     _env()
-    orig_env_pack = gen.config.env_pack
-    gen.config.env_pack = lambda **kw: fake_pack
+    orig_env_pack = cli.config.env_pack
+    cli.config.env_pack = lambda **kw: fake_pack
     try:
         with _Stubs() as s:
-            code = gen.main(["make", "-i", str(img), "--out-root", tmp])
+            code = cli.main(["make", "-i", str(img), "--out-root", tmp])
         assert code == 1
         assert s.analyze_calls == []
     finally:
-        gen.config.env_pack = orig_env_pack
+        cli.config.env_pack = orig_env_pack
         _clear()
 
 
@@ -408,7 +408,7 @@ def test_missing_image_in_response_writes_error_json():
     outcomes = [orclient.ImageMissing({"choices": [{"message": {"content": "refused"}}]})]
     try:
         with _Stubs(outcomes=outcomes):
-            code = gen.main(["make", "-t", "a coin", "--out-root", tmp])
+            code = cli.main(["make", "-t", "a coin", "--out-root", tmp])
         assert code == 1
         errors = list((Path(tmp) / "make").glob("*.error.json"))
         assert len(errors) == 1
@@ -427,8 +427,8 @@ def test_post_processing_failure_still_writes_a_sidecar_naming_the_failure():
         with _Stubs() as s:
             def boom(data):
                 raise RuntimeError("shape error")
-            gen.post.cut_background = boom
-            code = gen.main(["make", "-t", "a coin", "--out-root", tmp])
+            cli.post.cut_background = boom
+            code = cli.main(["make", "-t", "a coin", "--out-root", tmp])
         assert code == 1
         out = Path(tmp) / "make"
         raws = list(out.glob("*.raw.png"))
@@ -454,7 +454,7 @@ def test_cost_unknown_when_no_variant_reports_cost():
         with _Stubs(outcomes=[(b"A", None)]):
             buf = StringIO()
             with redirect_stdout(buf):
-                code = gen.main(["make", "-t", "a coin", "--out-root", tmp])
+                code = cli.main(["make", "-t", "a coin", "--out-root", tmp])
         assert code == 0
         out = buf.getvalue()
         assert "cost unknown" in out
@@ -471,7 +471,7 @@ def test_legitimate_zero_cost_is_not_reported_as_unknown():
         with _Stubs(outcomes=[(b"A", 0.0)]):
             buf = StringIO()
             with redirect_stdout(buf):
-                code = gen.main(["make", "-t", "a coin", "--out-root", tmp])
+                code = cli.main(["make", "-t", "a coin", "--out-root", tmp])
         assert code == 0
         assert "cost unknown" not in buf.getvalue()
         assert "$0.00" in buf.getvalue()
@@ -487,7 +487,7 @@ def test_cost_ceiling_stop_returns_exit_one_even_with_zero_failures():
     tmp = tempfile.mkdtemp(); _env()
     try:
         with _Stubs(outcomes=[(b"A", 0.05), (b"B", 0.05), (b"C", 0.05)]) as s:
-            code = gen.main(["make", "-t", "a coin", "-n", "3",
+            code = cli.main(["make", "-t", "a coin", "-n", "3",
                              "--max-cost", "0.05", "--out-root", tmp])
         assert code == 1
         assert len(s.prompts) == 1  # spent 0.05 after the first, budget exhausted
@@ -502,7 +502,7 @@ def test_sidecar_reference_path_is_resolved():
     img = _image_file(tmp)
     try:
         with _Stubs():
-            gen.main(["make", "-i", str(img), "--out-root", tmp])
+            cli.main(["make", "-i", str(img), "--out-root", tmp])
         side = json.loads(next((Path(tmp) / "make").glob("*.json")).read_text())
         assert side["reference"] == str(img.resolve())
     finally:
@@ -546,7 +546,7 @@ def test_make_real_chain_sends_reference_image_as_input_references():
             return _FakeResp({"choices": [{"message": {"content": schema_json}}]})
         return _FakeResp({"data": [{"b64_json": gen_b64}], "usage": {"cost": 0.04}})
 
-    import envfile
+    from spritegen import envfile
     orig_env_path = envfile.DEFAULT_ENV_PATH
     envfile.DEFAULT_ENV_PATH = Path(tempfile.mkdtemp()) / "absent.env"
     orig_post = orclient.requests.post
@@ -557,7 +557,7 @@ def test_make_real_chain_sends_reference_image_as_input_references():
     _clear(); _env()
     os.environ["SPRITEGEN_BASE_URL"] = "http://svc/v1"
     try:
-        code = gen.main(["make", "-i", str(img), "--out-root", tmp])
+        code = cli.main(["make", "-i", str(img), "--out-root", tmp])
     finally:
         orclient.requests.post = orig_post
         post.cut_background = orig_cut
@@ -571,10 +571,3 @@ def test_make_real_chain_sends_reference_image_as_input_references():
     assert posted_ref_url.endswith(base64.b64encode(ref_bytes).decode())
     assert any(u == "http://svc/v1/images" for u, _ in calls)
 
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all make tests passed")

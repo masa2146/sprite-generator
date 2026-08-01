@@ -1,4 +1,4 @@
-"""extract mechanics tests. Run: python3 test_extract.py"""
+"""extract mechanics tests. Run: python3 -m pytest tests/test_extract.py"""
 import contextlib
 import io
 import tempfile
@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PIL import Image
 
-import extract
+from spritegen import extract
 
 
 def _img(w=400, h=600):
@@ -114,7 +114,7 @@ def test_a_duplicate_id_is_rejected_and_the_first_crop_survives():
 
 def test_an_id_that_would_escape_the_refs_dir_is_rejected():
     """Important 4: the model's id becomes a path (refs_dir / f"{id}.png") and,
-    downstream, an asset id used the same way in gen.py's out_dir. An id like
+    downstream, an asset id used the same way in cli.py's out_dir. An id like
     "../escaped" must be rejected before it ever reaches Path(), not silently
     written outside refs_dir."""
     d = Path(tempfile.mkdtemp())
@@ -202,7 +202,7 @@ def test_pack_text_joins_the_style_prefix_in_visions_join_order():
     text = extract.pack_text("m/model", "SPRITEGEN_API_KEY", style, kept,
                              Path(tmp) / "refs", Path(tmp) / "p.toml")
     prefix = tomllib.loads(text)["style"]["prefix"]
-    import vision
+    from spritegen import vision
     assert prefix.strip() == vision.style_prefix({"style": style})
     assert prefix.index("palette-value") > prefix.index("realism-value")
 
@@ -223,7 +223,7 @@ def test_each_asset_points_at_its_own_crop_relative_to_the_pack():
 def test_the_view_phrase_is_appended_to_the_prompt():
     tmp = tempfile.mkdtemp()
     assets = tomllib.loads(_pack_text(tmp))["assets"]
-    import vision
+    from spritegen import vision
     assert assets[1]["prompt"].endswith(vision.VIEW_POOL["side"])
     assert "a round thing" in assets[1]["prompt"]      # form is carried
 
@@ -284,7 +284,7 @@ def test_a_refs_dir_outside_the_pack_dir_still_gets_a_relative_reference():
 import json
 import os
 
-import gen
+from spritegen import cli
 
 OBJECTS_REPLY = {
     "style": {"render": "soft 3D", "camera": "top-down", "lighting": "soft",
@@ -306,8 +306,8 @@ class _VisionStub:
         self.user_text = None
 
     def __enter__(self):
-        self._orig = gen.vision.analyze_objects
-        import envfile
+        self._orig = cli.vision.analyze_objects
+        from spritegen import envfile
         self._env = envfile.DEFAULT_ENV_PATH
         envfile.DEFAULT_ENV_PATH = Path(tempfile.mkdtemp()) / "absent.env"
 
@@ -318,12 +318,12 @@ class _VisionStub:
                 raise self.error
             return self.reply, json.dumps(self.reply)
 
-        gen.vision.analyze_objects = fake
+        cli.vision.analyze_objects = fake
         return self
 
     def __exit__(self, *exc):
-        gen.vision.analyze_objects = self._orig
-        import envfile
+        cli.vision.analyze_objects = self._orig
+        from spritegen import envfile
         envfile.DEFAULT_ENV_PATH = self._env
 
 
@@ -349,7 +349,7 @@ def test_extract_writes_pack_crops_and_sheet():
     try:
         pack = Path(tmp) / "out.toml"
         with _VisionStub():
-            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            code = cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                              "--no-open"])
         assert code == 0
         assert pack.exists()
@@ -368,7 +368,7 @@ def test_extract_refuses_to_overwrite_an_existing_pack():
         pack = Path(tmp) / "out.toml"
         pack.write_text("# mine\n")
         with _VisionStub() as stub:
-            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            code = cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                              "--no-open"])
         assert code == 1
         assert pack.read_text() == "# mine\n"
@@ -382,7 +382,7 @@ def test_extract_dry_run_writes_nothing():
     try:
         pack = Path(tmp) / "out.toml"
         with _VisionStub():
-            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            code = cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                              "--no-open", "--dry-run"])
         assert code == 0
         assert not pack.exists()
@@ -399,7 +399,7 @@ def test_extract_reports_rejected_boxes_and_keeps_the_rest():
     try:
         pack = Path(tmp) / "out.toml"
         with _VisionStub(reply=reply):
-            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            code = cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                              "--no-open"])
         assert code == 0
         ids = [a["id"] for a in tomllib.loads(pack.read_text())["assets"]]
@@ -417,7 +417,7 @@ def test_extract_fails_when_every_box_is_rejected():
     try:
         pack = Path(tmp) / "out.toml"
         with _VisionStub(reply=reply):
-            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            code = cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                              "--no-open"])
         assert code == 1
         assert not pack.exists()
@@ -435,7 +435,7 @@ def test_extract_caps_the_object_count():
     try:
         pack = Path(tmp) / "out.toml"
         with _VisionStub(reply=reply):
-            gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                       "--no-open", "--max-objects", "5"])
         assert len(tomllib.loads(pack.read_text())["assets"]) == 5
     finally:
@@ -446,7 +446,7 @@ def test_extract_missing_image_exits_cleanly():
     tmp = tempfile.mkdtemp(); _env_ready()
     try:
         with _VisionStub() as stub:
-            code = gen.main(["extract", "-i", str(Path(tmp) / "nope.png"),
+            code = cli.main(["extract", "-i", str(Path(tmp) / "nope.png"),
                              "--pack", str(Path(tmp) / "out.toml"), "--no-open"])
         assert code == 1
         assert stub.calls == 0
@@ -464,7 +464,7 @@ def test_extract_missing_image_exits_cleanly():
 # OPENROUTER_API_KEY default instead of the SPRITEGEN_API_KEY extract itself
 # authenticated with.
 
-import config
+from spritegen import config
 
 
 def test_extract_then_build_reaches_generation_without_a_style_bible():
@@ -475,7 +475,7 @@ def test_extract_then_build_reaches_generation_without_a_style_bible():
     try:
         pack = Path(tmp) / "packs" / "bunny.toml"
         with _VisionStub():
-            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            code = cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                              "--no-open"])
         assert code == 0
 
@@ -499,14 +499,14 @@ def test_extract_then_build_reaches_generation_without_a_style_bible():
             def save(self, path):
                 Path(path).write_bytes(self.data)
 
-        original = (gen.orclient.generate, gen.post.cut_background, gen.post.trim_and_pad)
-        gen.orclient.generate = fake_generate
-        gen.post.cut_background = lambda data: _FakeImg(data)
-        gen.post.trim_and_pad = lambda img, **kw: img
+        original = (cli.orclient.generate, cli.post.cut_background, cli.post.trim_and_pad)
+        cli.orclient.generate = fake_generate
+        cli.post.cut_background = lambda data: _FakeImg(data)
+        cli.post.trim_and_pad = lambda img, **kw: img
         try:
-            code = gen.main(["build", str(pack), "--out-root", str(out_root)])
+            code = cli.main(["build", str(pack), "--out-root", str(out_root)])
         finally:
-            gen.orclient.generate, gen.post.cut_background, gen.post.trim_and_pad = original
+            cli.orclient.generate, cli.post.cut_background, cli.post.trim_and_pad = original
 
         assert code == 0    # Critical 1: build reached generation, no style bible required
         assert not loaded.style_bible.exists()   # still never created
@@ -553,13 +553,13 @@ def test_the_dry_run_preview_names_the_same_objects_the_real_run_keeps():
         pack = Path(tmp) / "out.toml"
         buf = io.StringIO()
         with _VisionStub(reply=reply), contextlib.redirect_stdout(buf):
-            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            code = cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                              "--no-open", "--dry-run"])
         assert code == 0
         preview = buf.getvalue()
 
         with _VisionStub(reply=reply):
-            assert gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            assert cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                              "--no-open"]) == 0
         built = {a["id"].rsplit("-", 1)[0] for a in tomllib.loads(pack.read_text())["assets"]}
         assert built == {"good"}
@@ -614,7 +614,7 @@ def test_extract_passes_the_user_s_description_to_the_vision_call():
     try:
         pack = Path(tmp) / "out.toml"
         with _VisionStub() as stub:
-            code = gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            code = cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                              "--no-open", "-t", "there is a conveyor in the middle"])
         assert code == 0
         assert stub.user_text == "there is a conveyor in the middle"
@@ -627,7 +627,7 @@ def test_extract_without_text_passes_none():
     try:
         pack = Path(tmp) / "out.toml"
         with _VisionStub() as stub:
-            assert gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            assert cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                              "--no-open"]) == 0
         assert stub.user_text is None
     finally:
@@ -642,7 +642,7 @@ def test_extract_also_writes_the_html_input_sheet():
     try:
         pack = Path(tmp) / "out.toml"
         with _VisionStub():
-            assert gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            assert cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                              "--no-open"]) == 0
         html = pack.with_suffix(".html")
         assert html.exists()
@@ -660,7 +660,7 @@ def test_a_dry_run_writes_no_html_sheet():
     try:
         pack = Path(tmp) / "out.toml"
         with _VisionStub():
-            assert gen.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
+            assert cli.main(["extract", "-i", str(_scene(tmp)), "--pack", str(pack),
                              "--no-open", "--dry-run"]) == 0
         assert not pack.with_suffix(".html").exists()
     finally:
@@ -723,10 +723,3 @@ def test_a_long_content_list_is_summarised_not_dumped():
     one_over = extract._exclusion_clause([f"thing_{i}" for i in range(5)])
     assert "and 1 other element" in one_over and "1 other elements" not in one_over
 
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all extract tests passed")

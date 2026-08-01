@@ -15,7 +15,7 @@ import base64
 import json
 import re
 
-import orclient
+from . import orclient
 
 STYLE_FIELDS = ("render", "camera", "lighting", "palette", "linework", "realism")
 # Join order for prompt text, deliberately different from STYLE_FIELDS: palette

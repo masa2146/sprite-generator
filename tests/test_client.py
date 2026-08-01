@@ -1,11 +1,11 @@
-"""Transport tests. No network is touched. Run: python3 test_client.py"""
+"""Transport tests. No network is touched. Run: python3 -m pytest tests/test_client.py"""
 import base64
 import os
 
 import requests
 
-import orclient
-from config import Pack
+from spritegen import orclient
+from spritegen.config import Pack
 
 PNG = b"\x89PNG\r\n\x1a\nFAKEPIXELS"
 B64 = base64.b64encode(PNG).decode()
@@ -528,10 +528,3 @@ def test_post_with_retry_returns_the_parsed_body_and_retries_5xx():
     assert len(rec.calls) == 2
     assert slept == [2]
 
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all client tests passed")

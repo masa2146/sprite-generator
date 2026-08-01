@@ -1,7 +1,7 @@
-"""Geometry tests for post.trim_and_pad. Run: python3 test_post.py"""
+"""Geometry tests for post.trim_and_pad. Run: python3 -m pytest tests/test_post.py"""
 from PIL import Image
 
-from post import trim_and_pad
+from spritegen.post import trim_and_pad
 
 
 def _canvas(box, size=(512, 512), color=(0, 0, 255, 255)):
@@ -53,10 +53,3 @@ def test_no_resampling_subject_pixels_are_untouched():
     out = trim_and_pad(_canvas((156, 156, 356, 356), color=(12, 34, 56, 255)))
     assert out.getpixel((out.width // 2, out.height // 2)) == (12, 34, 56, 255)
 
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("all post tests passed")

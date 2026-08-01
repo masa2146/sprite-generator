@@ -40,7 +40,7 @@ def _b64(s) -> bytes | None:
 
 def chat_prompt_with_ratio(prompt: str, aspect_ratio: str | None) -> str:
     """The chat transport has no structured field for aspect ratio, so it gets
-    appended to the prompt text. Shared with gen.py's --dry-run so the dry-run
+    appended to the prompt text. Shared with cli.py's --dry-run so the dry-run
     output matches what generate() actually sends."""
     return f"{prompt}, aspect ratio {aspect_ratio}" if aspect_ratio else prompt
 

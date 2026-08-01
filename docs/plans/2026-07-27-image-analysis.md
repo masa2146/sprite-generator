@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+ (`tomllib` read-only from stdlib), `requests`, existing `pillow`/`rembg`. No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-07-27-image-analysis-design.md`
+**Spec:** `docs/specs/2026-07-27-image-analysis-design.md`
 
 ## Global Constraints
 

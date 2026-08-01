@@ -8,6 +8,8 @@ Commands:
     make            pack-less one-shot: an image, a text, or both -> one sprite
     extract         find every sprite in an image and write a buildable pack
     export <spec>   write an HTML file of each asset's reference and prompt
+    brief           turn a screenshot into crops and paste-ready prompts
+    cut             strip the background from PNGs you already have
 """
 
 from __future__ import annotations
@@ -25,14 +27,17 @@ from pathlib import Path
 
 from PIL import Image
 
-import config
-import export
-import extract
-import orclient
-import packwriter
-import post
-import vision
+from . import brief
+from . import config
+from . import cutout
+from . import export
+from . import extract
+from . import orclient
+from . import packwriter
+from . import post
+from . import vision
 
+PROG = "spritegen"       # console script; `python3 -m spritegen` is the same CLI
 EST_COST = 0.04          # per-image estimate for --dry-run only
 DEFAULT_MAX_COST = 5.00
 WORKERS = 4              # API calls are I/O bound; rembg stays on the main thread
@@ -274,7 +279,7 @@ def cmd_build(args):
               f"{len(targets) - len(records)} assets not requested")
     if failed:
         print("failed: " + ", ".join(f"{r['id']} ({r['error']})" for r in failed))
-        print(f"retry: python3 gen.py build {args.spec} --only "
+        print(f"retry: {PROG} build {args.spec} --only "
               + ",".join(r["id"] for r in failed))
     # A truncated run (cost ceiling hit) or a failed manifest write means the batch
     # is incomplete or unrecorded, even if every asset that did run succeeded — a
@@ -359,7 +364,7 @@ def cmd_init(args):
 
     sheet = contact_sheet(written, pack.candidates_dir / "contact_sheet.png")
     print(f"\n{len(written)} plates → {sheet}")
-    print(f"pick one:  python3 gen.py pick {args.spec} <0-{len(written) - 1}>")
+    print(f"pick one:  {PROG} pick {args.spec} <0-{len(written) - 1}>")
     if not args.no_open:
         webbrowser.open(Path(sheet).resolve().as_uri())
     return 0
@@ -387,7 +392,7 @@ def cmd_pick(args):
         print(f"error: cannot write {pack.style_bible}: {exc}", file=sys.stderr)
         return 1
     print(f"style bible locked: {pack.style_bible}")
-    print(f"now run:  python3 gen.py build {args.spec}")
+    print(f"now run:  {PROG} build {args.spec}")
     return 0
 
 
@@ -470,7 +475,7 @@ def cmd_analyze(args):
               "re-run analyze", file=sys.stderr)
         return 1
     print(f"wrote style bible     -> {pack.style_bible}")
-    print(f"\nnow run:  python3 gen.py build {args.pack}")
+    print(f"\nnow run:  {PROG} build {args.pack}")
     return 0
 
 
@@ -819,7 +824,7 @@ def cmd_extract(args):
     if sheet and not args.no_open:
         webbrowser.open(Path(sheet).resolve().as_uri())
     print(f"\nreview the sheet, prune the pack, then:\n"
-          f"  python3 gen.py build {pack_path} --dry-run")
+          f"  {PROG} build {pack_path} --dry-run")
     return 0
 
 
@@ -839,8 +844,19 @@ def _add_common(sub):
     _add_endpoint_flags(sub)
 
 
+# Subcommands that own their whole argv: each is a tool with its own parser,
+# so this one hands over before parsing rather than re-declaring their flags.
+PASSTHROUGH = {"brief": brief, "cut": cutout}
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="gen.py", description=__doc__)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in PASSTHROUGH:
+        # Before parse_args, not as a subparser: argparse would eat `--help`
+        # itself, and nargs=REMAINDER does not capture a leading option.
+        return PASSTHROUGH[argv[0]].main(argv[1:])
+
+    parser = argparse.ArgumentParser(prog=PROG, description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
 
     build = subs.add_parser("build", help="generate every asset in the spec")
@@ -924,10 +940,11 @@ def main(argv=None):
     _add_endpoint_flags(export_p)
     export_p.set_defaults(func=cmd_export)
 
+    # Listed so `--help` shows them; PASSTHROUGH above is what actually runs them.
+    subs.add_parser("brief", add_help=False,
+                    help="turn a screenshot into crops and paste-ready prompts")
+    subs.add_parser("cut", add_help=False,
+                    help="strip the background from PNGs you already have")
 
     args = parser.parse_args(argv)
     return args.func(args)
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -1,0 +1,31 @@
+[project]
+name = "spritegen"
+version = "0.1.0"
+description = "Turns a TOML list of prompts into engine-ready RGBA sprite PNGs, style-locked to one reference image"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "pillow>=10.0",
+    "rembg[gpu]>=2.0.75",
+]
+
+[project.scripts]
+spritegen = "spritegen.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/masa2146/sprite-generator"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["spritegen"]
+
+[tool.pytest.ini_options]
+# Tests import the package from the checkout, so a plain `pytest` works
+# without installing first.
+pythonpath = ["."]
+testpaths = ["tests"]

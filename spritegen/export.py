@@ -16,7 +16,7 @@ import base64
 import html
 from pathlib import Path
 
-import orclient
+from . import orclient
 
 _CSS = """
 body { font: 15px/1.55 -apple-system, Segoe UI, sans-serif; margin: 0 auto;
