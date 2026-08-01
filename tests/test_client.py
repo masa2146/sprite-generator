@@ -97,7 +97,7 @@ def test_payload_without_reference_has_only_text_content():
 
 
 def test_payload_with_reference_appends_base64_data_uri():
-    body = orclient.build_payload("m/model", "hello", reference_png=PNG, seed=7)
+    body = orclient.build_payload("m/model", "hello", structure_png=PNG, seed=7)
     content = body["messages"][0]["content"]
     assert len(content) == 2
     assert content[1]["type"] == "image_url"
@@ -107,7 +107,7 @@ def test_payload_with_reference_appends_base64_data_uri():
 
 def test_payload_declares_jpeg_mime_for_a_jpeg_reference():
     jpeg = b"\xff\xd8\xff\xe0FAKEJPEGBYTES"
-    body = orclient.build_payload("m/model", "hello", reference_png=jpeg)
+    body = orclient.build_payload("m/model", "hello", structure_png=jpeg)
     url = body["messages"][0]["content"][1]["image_url"]["url"]
     assert url.startswith("data:image/jpeg;base64,")
     assert base64.b64decode(url.split(",", 1)[1]) == jpeg
@@ -115,7 +115,7 @@ def test_payload_declares_jpeg_mime_for_a_jpeg_reference():
 
 def test_payload_declares_webp_mime_for_a_webp_reference():
     webp = b"RIFF\x00\x00\x00\x00WEBPVP8 REST"
-    body = orclient.build_payload("m/model", "hello", reference_png=webp)
+    body = orclient.build_payload("m/model", "hello", structure_png=webp)
     url = body["messages"][0]["content"][1]["image_url"]["url"]
     assert url.startswith("data:image/webp;base64,")
 
@@ -125,7 +125,7 @@ def test_payload_sends_the_style_image_second():
     "Image 1" and the style screenshot "Image 2"."""
     jpeg = b"\xff\xd8\xff\xe0FAKEJPEGBYTES"
     content = orclient.build_payload(
-        "m/model", "hello", reference_png=PNG, style_png=jpeg
+        "m/model", "hello", structure_png=PNG, style_png=jpeg
     )["messages"][0]["content"]
     assert len(content) == 3
     assert content[1]["image_url"]["url"] == f"data:image/png;base64,{B64}"
@@ -149,7 +149,7 @@ def test_images_payload_shape_and_optional_fields_omitted():
 
 def test_images_payload_includes_aspect_ratio_seed_and_reference():
     body = orclient.build_payload_images(
-        "m/model", "hello", aspect_ratio="3:4", reference_png=PNG, seed=414956289
+        "m/model", "hello", aspect_ratio="3:4", structure_png=PNG, seed=414956289
     )
     assert body["model"] == "m/model"
     assert body["prompt"] == "hello"
@@ -164,7 +164,7 @@ def test_images_payload_includes_aspect_ratio_seed_and_reference():
 def test_images_payload_sends_both_references_in_order():
     jpeg = b"\xff\xd8\xff\xe0FAKEJPEGBYTES"
     refs = orclient.build_payload_images(
-        "m/model", "hello", reference_png=PNG, style_png=jpeg
+        "m/model", "hello", structure_png=PNG, style_png=jpeg
     )["input_references"]
     assert len(refs) == 2
     assert refs[0]["image_url"]["url"] == f"data:image/png;base64,{B64}"
@@ -173,7 +173,7 @@ def test_images_payload_sends_both_references_in_order():
 
 def test_images_payload_declares_jpeg_mime_for_a_jpeg_reference():
     jpeg = b"\xff\xd8\xff\xe0FAKEJPEGBYTES"
-    body = orclient.build_payload_images("m/model", "hello", reference_png=jpeg)
+    body = orclient.build_payload_images("m/model", "hello", structure_png=jpeg)
     ref = body["input_references"][0]
     assert ref["image_url"]["url"].startswith("data:image/jpeg;base64,")
     assert base64.b64decode(ref["image_url"]["url"].split(",", 1)[1]) == jpeg

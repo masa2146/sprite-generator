@@ -72,21 +72,21 @@ class _Stubs:
         self.outcomes = outcomes if isinstance(outcomes, dict) else list(outcomes)
         self._lock = threading.Lock()
         self.prompts = []
-        self.references = []
+        self.structures = []  # structure_png passed into generate(), in call order
+        self.styles = []      # style_png passed into generate(), in call order
         self.aspect_ratios = []  # aspect_ratio passed into generate(), in call order
-        self.style_pngs = []  # style_png passed into generate(), in call order
         self.cut_calls = []   # bytes passed to post.cut_background, in call order
         self.trim_calls = []  # images passed to post.trim_and_pad, in call order
 
     def __enter__(self):
         self._orig = (cli.orclient.generate, cli.post.cut_background, cli.post.trim_and_pad)
 
-        def fake_generate(pack, prompt, aspect_ratio=None, reference_png=None, seed=None,
+        def fake_generate(pack, prompt, aspect_ratio=None, structure_png=None, seed=None,
                           style_png=None, **kw):
             self.prompts.append(prompt)
-            self.references.append(reference_png)
+            self.structures.append(structure_png)
+            self.styles.append(style_png)
             self.aspect_ratios.append(aspect_ratio)
-            self.style_pngs.append(style_png)
             if isinstance(self.outcomes, dict):
                 outcome = next(
                     v for aid, v in self.outcomes.items() if pack.seed_for(aid) == seed
@@ -221,14 +221,6 @@ def test_build_writes_png_per_asset_and_a_manifest():
     # per-asset override) — proves build_one actually threads asset.aspect_ratio
     # into generate() rather than dropping it silently.
     assert stubs.aspect_ratios == ["1:1", "1:1", "1:1"]
-
-
-def test_build_sends_style_bible_as_reference_on_every_request():
-    tmp = tempfile.mkdtemp()
-    spec = _prepare(tmp)
-    with _Stubs([(b"A", 0.0), (b"B", 0.0), (b"C", 0.0)]) as stubs:
-        cli.main(["build", str(spec), "--out-root", tmp])
-    assert stubs.references == [b"BIBLE", b"BIBLE", b"BIBLE"]
 
 
 def test_build_skips_cutout_pipeline_when_asset_sets_cutout_false():
@@ -470,7 +462,7 @@ def test_init_sends_no_reference_and_uses_the_plate_prompt():
     spec = _spec_file()
     with _Stubs(_plate_outcomes()) as stubs:
         cli.main(["init", str(spec), "--out-root", tmp, "--no-open"])
-    assert stubs.references == [None, None, None, None]
+    assert stubs.structures == [None, None, None, None]
     assert all("a button, an icon, a character" in p for p in stubs.prompts)
     assert all("#808080" in p for p in stubs.prompts)
     assert stubs.aspect_ratios == ["1:1", "1:1", "1:1", "1:1"]  # SPEC has no [defaults]
@@ -583,7 +575,7 @@ def test_build_runs_after_init_and_pick():
     with _Stubs([(b"A", 0.0), (b"B", 0.0), (b"C", 0.0)]) as stubs:
         code = cli.main(["build", str(spec), "--out-root", tmp])
     assert code == 0
-    assert stubs.references == [PLATES[1], PLATES[1], PLATES[1]]
+    assert stubs.styles == [PLATES[1], PLATES[1], PLATES[1]]
 
 
 def test_contact_sheet_is_a_two_by_two_grid():
@@ -976,7 +968,8 @@ def test_asset_reference_overrides_the_style_bible():
     (refs / "own.png").write_bytes(b"OWNREF")
     with _Stubs({"btn_play": (b"A", 0.04)}) as stubs:
         cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
-    assert stubs.references == [b"OWNREF"]      # not the style bible's b"BIBLE"
+    assert stubs.structures == [b"OWNREF"]      # not the style bible's b"BIBLE"
+    assert stubs.styles == [None]
 
 
 def _spec_with_style_reference(tmp, ref_value="refs/_style.png"):
@@ -990,6 +983,20 @@ def _spec_with_style_reference(tmp, ref_value="refs/_style.png"):
     return spec, refs
 
 
+def test_the_style_bible_travels_as_a_style_reference_not_a_structure():
+    """The bible is an example of the look, never a silhouette to trace.
+
+    Sent as a structure it comes back copied: spritepipe's README records three
+    different prompts returning three copies of exactly this image.
+    """
+    tmp = tempfile.mkdtemp()
+    spec = _prepare(tmp)
+    with _Stubs([(b"A", 0.0), (b"B", 0.0), (b"C", 0.0)]) as stubs:
+        cli.main(["build", str(spec), "--out-root", tmp])
+    assert stubs.structures == [None, None, None]
+    assert stubs.styles == [b"BIBLE", b"BIBLE", b"BIBLE"]
+
+
 def test_the_style_image_rides_along_with_an_assets_own_crop():
     """Two images: the crop says what to draw, the screenshot says how it looks.
     Text alone loses the palette."""
@@ -998,21 +1005,22 @@ def test_the_style_image_rides_along_with_an_assets_own_crop():
     (refs / "_style.png").write_bytes(b"SHOT")
     with _Stubs({"btn_play": (b"A", 0.04)}) as stubs:
         cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
-    assert stubs.references == [b"OWNREF"]
-    assert stubs.style_pngs == [b"SHOT"]
+    assert stubs.structures == [b"OWNREF"]
+    assert stubs.styles == [b"SHOT"]
     assert "REFERENCES" in stubs.prompts[0]
 
 
-def test_no_style_image_is_sent_when_the_asset_has_no_crop_of_its_own():
-    """Without its own reference the asset already gets the style bible — a
-    second style image would say the same thing twice, and the prompt would
-    promise an Image 2 that means nothing."""
+def test_an_asset_with_no_crop_gets_the_bible_as_its_style_image():
+    """No structure image means nothing to redraw — the bible only says how the
+    result should look, and the prompt must not promise an image2 that carries
+    a different meaning."""
     tmp = tempfile.mkdtemp()
     spec, refs = _spec_with_style_reference(tmp)
     (refs / "_style.png").write_bytes(b"SHOT")
     with _Stubs({"icon_coin": (b"A", 0.04)}) as stubs:
         cli.main(["build", str(spec), "--out-root", tmp, "--only", "icon_coin"])
-    assert stubs.style_pngs == [None]
+    assert stubs.structures == [None]
+    assert stubs.styles == [b"BIBLE"]
     assert "REFERENCES" not in stubs.prompts[0]
 
 

@@ -89,14 +89,14 @@ def image_part(data: bytes) -> dict:
 def build_payload(
     model: str,
     prompt: str,
-    reference_png: bytes | None = None,
+    structure_png: bytes | None = None,
     seed: int | None = None,
     style_png: bytes | None = None,
 ) -> dict:
     # Order is the contract: the prompt's REFERENCES block calls the first image
-    # "Image 1 — the object to redraw" and the second "Image 2 — style only".
+    # "image1 — the object to redraw" and the second "image2 — style only".
     content: list[dict] = [{"type": "text", "text": prompt}]
-    content += [image_part(img) for img in (reference_png, style_png) if img]
+    content += [image_part(img) for img in (structure_png, style_png) if img]
     body = {
         "model": model,
         "modalities": ["image", "text"],
@@ -113,7 +113,7 @@ def build_payload_images(
     model: str,
     prompt: str,
     aspect_ratio: str | None = None,
-    reference_png: bytes | None = None,
+    structure_png: bytes | None = None,
     seed: int | None = None,
     style_png: bytes | None = None,
 ) -> dict:
@@ -125,7 +125,7 @@ def build_payload_images(
     if seed is not None:
         body["seed"] = seed
     # Same order as build_payload: object first, style second.
-    refs = [image_part(img) for img in (reference_png, style_png) if img]
+    refs = [image_part(img) for img in (structure_png, style_png) if img]
     if refs:
         body["input_references"] = refs
     return body
@@ -250,11 +250,11 @@ def generate(
     pack,
     prompt: str,
     aspect_ratio: str | None = None,
-    reference_png: bytes | None = None,
+    structure_png: bytes | None = None,
+    style_png: bytes | None = None,
     seed: int | None = None,
     retries: int = 3,
     sleeper=time.sleep,
-    style_png: bytes | None = None,
 ) -> tuple[bytes, float | None, dict]:
     """Generate one image. Returns (png_bytes, cost_or_none, raw_response).
 
@@ -269,14 +269,14 @@ def generate(
         url = pack.base_url.rstrip("/") + "/images"
         payload = build_payload_images(
             pack.model, prompt, aspect_ratio=aspect_ratio,
-            reference_png=reference_png, seed=seed, style_png=style_png,
+            structure_png=structure_png, seed=seed, style_png=style_png,
         )
         parse = parse_image_images
     else:
         url = pack.base_url.rstrip("/") + "/chat/completions"
         payload = build_payload(
-            pack.model, chat_prompt_with_ratio(prompt, aspect_ratio), reference_png, seed,
-            style_png=style_png,
+            pack.model, chat_prompt_with_ratio(prompt, aspect_ratio),
+            structure_png=structure_png, seed=seed, style_png=style_png,
         )
         parse = parse_image
 

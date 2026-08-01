@@ -75,10 +75,10 @@ class _Stubs:
                 raise self.analyze_error
             return self.schema, json.dumps(self.schema)
 
-        def fake_generate(pack, prompt, aspect_ratio=None, reference_png=None,
-                          seed=None, **kw):
+        def fake_generate(pack, prompt, aspect_ratio=None, structure_png=None,
+                          seed=None, style_png=None, **kw):
             self.prompts.append(prompt)
-            self.references.append(reference_png)
+            self.references.append(style_png)
             self.seeds.append(seed)
             outcome = self.outcomes.pop(0) if self.outcomes else (b"IMG", 0.05)
             if isinstance(outcome, Exception):

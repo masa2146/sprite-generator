@@ -72,26 +72,37 @@ def _record(pack, asset, status, cost=None, file=None, error=None):
     }
 
 
-def build_one(pack, asset, reference_png):
-    """Generate and post-process one asset. Returns a manifest record, never raises."""
+def build_one(pack, asset, bible_png):
+    """Generate and post-process one asset. Returns a manifest record, never raises.
+
+    Two named slots, because the two images do different jobs and the backend
+    routes them by job, not by position:
+      structure -- the object to redraw. Only an asset's own crop is ever this.
+      style     -- what the result should look like. The pack's [style]
+                   reference beside a crop, or the style bible when the asset
+                   brought no crop of its own.
+    A style image is never sent as a structure: a backend with no style-
+    conditioning input transforms it instead, and returns a copy of it.
+    """
     out_dir = pack.out_dir
-    style_png = None
+    structure_png = None
+    style_png = bible_png
     if asset.reference is not None:
         try:
-            reference_png = asset.reference.read_bytes()
+            structure_png = asset.reference.read_bytes()
         except OSError as exc:
             # Fail this asset only — the pack's other assets are unaffected.
             return _record(pack, asset, "failed",
                            error=f"cannot read reference {asset.reference}: {exc}")
-        # The pack's style image rides along as Image 2: the crop says what to
-        # draw, the screenshot says how it should look. Only when the asset
-        # brought its own crop — without one, reference_png is already the style
-        # bible and a second style image would say the same thing twice.
+        # With its own crop the asset does not need the bible: the pack's own
+        # style image is the better look source, and where there is none the
+        # style prefix carries the look on words alone.
+        style_png = None
         if pack.style_reference is not None:
             try:
                 style_png = pack.style_reference.read_bytes()
             except OSError as exc:
-                # full_prompt already promised the model an "Image 2", so
+                # full_prompt already promised the model an "image2", so
                 # sending one image against that prompt would be a lie.
                 return _record(pack, asset, "failed",
                                error=f"cannot read [style] reference "
@@ -101,9 +112,9 @@ def build_one(pack, asset, reference_png):
             pack,
             pack.full_prompt(asset),
             aspect_ratio=asset.aspect_ratio,
-            reference_png=reference_png,
-            seed=pack.seed_for(asset.id),
+            structure_png=structure_png,
             style_png=style_png,
+            seed=pack.seed_for(asset.id),
         )
     except orclient.ImageMissing as exc:
         try:
@@ -233,7 +244,7 @@ def cmd_build(args):
         return 1
 
     pack.out_dir.mkdir(parents=True, exist_ok=True)
-    reference = pack.style_bible.read_bytes() if needs_bible else None
+    bible_png = pack.style_bible.read_bytes() if needs_bible else None
 
     records = []
     spent = 0.0
@@ -246,7 +257,7 @@ def cmd_build(args):
             stopped_early = True
             break
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-            futures = [(a, pool.submit(build_one, pack, a, reference)) for a in chunk]
+            futures = [(a, pool.submit(build_one, pack, a, bible_png)) for a in chunk]
             # build_one's contract is "never raises," but this is defence in depth:
             # if it somehow does, that asset degrades to a failed record instead of
             # taking down the whole batch.
@@ -589,7 +600,9 @@ def cmd_make(args):
         try:
             png, cost, _raw = orclient.generate(
                 pack, prompt, aspect_ratio=args.aspect_ratio,
-                reference_png=image_bytes, seed=i,
+                # The prompt already describes the object in full; the image is
+                # here as a likeness to match, not a silhouette to trace.
+                style_png=image_bytes, seed=i,
             )
         except orclient.ImageMissing as exc:
             try:

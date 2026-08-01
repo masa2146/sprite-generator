@@ -500,9 +500,9 @@ def test_extract_then_build_reaches_generation_without_a_style_bible():
         seed_to_id = {loaded.seed_for(a.id): a.id for a in loaded.assets}
         calls = {}
 
-        def fake_generate(pack_, prompt, aspect_ratio=None, reference_png=None,
+        def fake_generate(pack_, prompt, aspect_ratio=None, structure_png=None,
                           seed=None, **kw):
-            calls[seed_to_id[seed]] = reference_png
+            calls[seed_to_id[seed]] = structure_png
             return b"\x89PNG\r\n\x1a\nFAKE", 0.01, {"stub": True}
 
         class _FakeImg:
