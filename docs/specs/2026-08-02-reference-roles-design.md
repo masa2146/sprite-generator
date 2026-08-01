@@ -83,9 +83,10 @@ alıyordu; değişen tek şey artık doğru rolle gitmesi. Pack'in `[style] refe
 bile bu satırda style bible kazanır — asset'in kendi crop'u yokken gönderilecek ikinci bir
 görsel yoktur, ve bugünkü davranış budur.
 
-`build` dışındaki tek `generate()` çağrısı `analyze` akışının aday üretimidir; kullanıcının
-kaynak görselini `style_png` olarak gönderir. Orada da bir siluet değil, taklit edilecek bir
-görünüm vardır.
+`build` dışında iki `generate()` çağrısı daha var. `init`'in stil plakası hiç referans
+göndermez — stil orada doğuyor. `make` kullanıcının kaynak görselini `style_png` olarak
+gönderir: prompt nesneyi zaten tam olarak tarif ediyor, görsel orada izlenecek bir siluet
+değil, tutturulacak bir görünümdür.
 
 `[style] reference` okunamazsa asset başarısız olur (yumuşak geçiş değil): `full_prompt` o
 noktada modele zaten bir `image2` vaat etmiştir, tek görselle göndermek yalan olur.
@@ -130,6 +131,16 @@ REFERENCES
 
 Metin `config.py`'de tek yerde durur; `brief.html`'in figür başlıkları da aynı sözcüğü
 kullanır, böylece ekranda yazan ile prompt'ta yazan ayrışmaz.
+
+Bloğun `image1` maddesi kısa değil, ve kısaltılmamalı: canlı bir denemede "reproduce THIS
+object" tek başına nesneyi sadakatle üretti — crop'un 52×60'lık bir telefon ekranı
+yakalaması olduğu gerçeğiyle beraber. Sonuç, "flat vector-style, no hard outlines" isteyen
+bir stil prefiksine rağmen sert konturlu piksel sanatı olarak döndü: modele piksel sanatı
+gösterip "bunu üret" dersen piksel sanatı üretir, çünkü görsel kanıt metin stil bloğunu
+yener. Crop'u yumuşatarak büyütmek de işe yaramadı — model zaten kendi latent çözünürlüğüne
+yeniden örnekliyor, taşınan şey referansın piksel boyutu değil içeriği. Kimliği
+render'dan ayıran şey artefaktları adıyla anmak. Bu, spritepipe'ın README'sindeki "Qwen-Edit
+structure görselinin çizim stilini de alır" uyarısının bu projedeki karşılığı.
 
 ## Testler
 
