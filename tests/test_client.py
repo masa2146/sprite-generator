@@ -157,7 +157,7 @@ def test_images_payload_includes_aspect_ratio_seed_and_reference():
     assert body["aspect_ratio"] == "3:4"
     assert body["seed"] == 414956289
     assert body["input_references"] == [
-        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{B64}"}}
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{B64}"}, "role": "structure"}
     ]
 
 
@@ -169,6 +169,32 @@ def test_images_payload_sends_both_references_in_order():
     assert len(refs) == 2
     assert refs[0]["image_url"]["url"] == f"data:image/png;base64,{B64}"
     assert refs[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_images_payload_declares_each_references_role():
+    """The local backend routes by role, not by position: an unroled reference
+    counts as a style hint and a bare style hint is never used at all."""
+    jpeg = b"\xff\xd8\xff\xe0FAKEJPEGBYTES"
+    refs = orclient.build_payload_images(
+        "m/model", "hello", structure_png=PNG, style_png=jpeg
+    )["input_references"]
+    assert [r["role"] for r in refs] == ["structure", "style"]
+
+
+def test_a_lone_style_reference_is_still_marked_style():
+    refs = orclient.build_payload_images(
+        "m/model", "hello", style_png=PNG
+    )["input_references"]
+    assert len(refs) == 1
+    assert refs[0]["role"] == "style"
+
+
+def test_a_lone_structure_reference_is_marked_structure():
+    refs = orclient.build_payload_images(
+        "m/model", "hello", structure_png=PNG
+    )["input_references"]
+    assert len(refs) == 1
+    assert refs[0]["role"] == "structure"
 
 
 def test_images_payload_declares_jpeg_mime_for_a_jpeg_reference():

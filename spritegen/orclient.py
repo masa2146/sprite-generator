@@ -86,6 +86,18 @@ def image_part(data: bytes) -> dict:
     }
 
 
+def reference_part(data: bytes, role: str) -> dict:
+    """One entry of input_references: an image plus the job it does.
+
+    `role` is not in OpenRouter's schema, but the local backend routes on it and
+    treats an unroled reference as a style hint — which it then never uses,
+    because a text-to-image graph has no style-conditioning input and
+    transforming a style hint just returns a copy of it. Sending no role at all
+    is therefore the one option that is certainly wrong.
+    """
+    return {**image_part(data), "role": role}
+
+
 def build_payload(
     model: str,
     prompt: str,
@@ -124,8 +136,11 @@ def build_payload_images(
         body["aspect_ratio"] = aspect_ratio
     if seed is not None:
         body["seed"] = seed
-    # Same order as build_payload: object first, style second.
-    refs = [image_part(img) for img in (structure_png, style_png) if img]
+    # Same order as build_payload, but the meaning now travels in `role`, not
+    # in the position: object first, style second.
+    refs = [reference_part(img, role)
+            for img, role in ((structure_png, "structure"), (style_png, "style"))
+            if img]
     if refs:
         body["input_references"] = refs
     return body
