@@ -14,7 +14,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-DEFAULT_ENV_PATH = Path(__file__).resolve().parent / ".env"
+# The repo root, beside .env.example -- which is where .env.example's own header
+# tells you to copy it. This used to point one level down, inside the package
+# directory, so the file every user actually writes was never read: `make` would
+# report "no image model" with a fully populated .env sitting right there. Packs
+# hid it, because a pack carries base_url/model in its own [api] table.
+DEFAULT_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
 def parse_env(text: str) -> dict[str, str]:

@@ -438,6 +438,31 @@ def test_env_pack_falls_back_to_openrouter_api_key():
         _clear_env()
 
 
+def test_an_empty_api_key_means_the_endpoint_needs_none():
+    """`SPRITEGEN_API_KEY=` is how a keyless local endpoint is declared, the
+    same as [api] key_env = "" in a pack. Read as merely unset, it demanded
+    OPENROUTER_API_KEY and `make` could not reach a local server at all."""
+    _clear_env()
+    os.environ.update({"SPRITEGEN_MODEL": "m", "SPRITEGEN_API_KEY": ""})
+    try:
+        from spritegen.config import env_pack
+        pack = env_pack()
+        assert pack.key_env == ""
+        assert pack.api_key() is None      # and so no Authorization header
+    finally:
+        _clear_env()
+
+
+def test_a_populated_api_key_is_still_preferred():
+    _clear_env()
+    os.environ.update({"SPRITEGEN_MODEL": "m", "SPRITEGEN_API_KEY": "sk-local"})
+    try:
+        from spritegen.config import env_pack
+        assert env_pack().api_key() == "sk-local"
+    finally:
+        _clear_env()
+
+
 def test_env_pack_vision_falls_back_to_the_main_endpoint_and_key():
     _clear_env()
     os.environ.update({

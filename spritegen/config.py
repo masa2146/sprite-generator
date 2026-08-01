@@ -277,8 +277,16 @@ def env_pack(
             "(set SPRITEGEN_TRANSPORT or pass --transport)"
         )
 
-    # Store the name of whichever key variable is actually populated.
-    key_env = "SPRITEGEN_API_KEY" if os.environ.get("SPRITEGEN_API_KEY") else DEFAULT_KEY_ENV
+    # Store the name of whichever key variable is actually populated. An
+    # explicitly empty SPRITEGEN_API_KEY means "this endpoint needs no key",
+    # matching what [api] key_env = "" already means in a pack. Treating empty
+    # as unset instead put a keyless local endpoint out of reach of `make`: the
+    # empty value is falsy, so OPENROUTER_API_KEY was demanded and generation
+    # against a local server failed before it sent a single request.
+    if "SPRITEGEN_API_KEY" in os.environ:
+        key_env = "SPRITEGEN_API_KEY" if os.environ["SPRITEGEN_API_KEY"] else ""
+    else:
+        key_env = DEFAULT_KEY_ENV
     vision_key_env = (
         "SPRITEGEN_VISION_API_KEY"
         if os.environ.get("SPRITEGEN_VISION_API_KEY")

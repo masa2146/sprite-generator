@@ -87,6 +87,28 @@ def test_a_real_env_var_is_not_overridden():
             os.environ.pop(k, None)
 
 
+def test_default_path_is_the_repo_root_not_the_package_dir():
+    """The .env users are told to write sits beside .env.example at the repo
+    root. Pointing the default inside spritegen/ meant a fully populated .env
+    was silently never read, and `make` claimed no model was set."""
+    import importlib.util
+
+    from spritegen import envfile
+
+    # Loaded fresh rather than read off the imported module: several tests
+    # repoint envfile.DEFAULT_ENV_PATH at a temp file to isolate themselves and
+    # do not put it back, so the live global says nothing about the default.
+    spec = importlib.util.spec_from_file_location("_envfile_probe", envfile.__file__)
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+
+    root = Path(envfile.__file__).resolve().parent.parent
+    assert probe.DEFAULT_ENV_PATH == root / ".env"
+    assert probe.DEFAULT_ENV_PATH.parent.name != "spritegen"
+    # .env itself is gitignored, but the example it is copied from is not.
+    assert (root / ".env.example").is_file()
+
+
 def test_missing_file_is_not_an_error():
     assert load_env(Path(tempfile.mkdtemp()) / "nope.env") == {}
 
