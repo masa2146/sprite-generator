@@ -4,3 +4,7 @@ __pycache__/
 .env
 .superpowers/
 *.toml.bak
+packs
+.gstack/
+briefs
+.DS_Store
