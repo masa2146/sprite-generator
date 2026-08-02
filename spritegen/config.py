@@ -48,15 +48,20 @@ BG_CLAUSE = ("isolated on flat solid #808080 neutral grey background, no shadow,
 # resamples to its own latent resolution anyway, so what carries is the
 # reference's content, not its pixel dimensions. Naming the artefacts is what
 # separates identity from rendering.
+# The images are named the way the *model* sees them, not the way the graph's
+# input sockets are named. ComfyUI's TextEncodeQwenImageEditPlus prepends
+# "Picture 1: <image>Picture 2: <image>" to the prompt before tokenising, so
+# "image1" refers to a label that never reaches the model and cannot bind to
+# anything. The socket is called image1; what the model reads is Picture 1.
 REFERENCES_BLOCK = (
     "REFERENCES\n"
-    "- image1 — the object to redraw. Take its IDENTITY from this and nothing\n"
+    "- Picture 1 — the object to redraw. Take its IDENTITY from this and nothing\n"
     "  else: silhouette, proportions, colours, markings, features.\n"
-    "  Do NOT take its rendering. image1 is a small low-resolution screen\n"
+    "  Do NOT take its rendering. Picture 1 is a small low-resolution screen\n"
     "  capture; its pixellation, blocky stair-stepped edges and colour banding\n"
     "  are capture artefacts, not design. Redraw the object cleanly at full\n"
     "  resolution in the ART STYLE below.\n"
-    "- image2 — the reference screenshot. Use it ONLY for art style, palette\n"
+    "- Picture 2 — the reference screenshot. Use it ONLY for art style, palette\n"
     "  and lighting. Do not copy any object from it."
 )
 

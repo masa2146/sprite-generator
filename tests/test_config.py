@@ -138,13 +138,20 @@ def test_a_sprite_prompt_carries_every_block_in_order():
     assert "any text, numbers, labels or logos" in text
 
 
-def test_the_references_block_uses_the_backends_slot_names():
-    """image1/image2 are what TextEncodeQwenImageEditPlus calls its inputs; a
-    prompt that says "Image 1" instead names nothing the graph knows."""
-    assert "image1" in config.REFERENCES_BLOCK
-    assert "image2" in config.REFERENCES_BLOCK
-    assert "Image 1" not in config.REFERENCES_BLOCK
-    assert "Image 2" not in config.REFERENCES_BLOCK
+def test_the_references_block_names_the_images_the_way_the_model_sees_them():
+    """"Picture 1"/"Picture 2", not the graph's socket names.
+
+    TextEncodeQwenImageEditPlus builds the text it tokenises as
+    `"Picture 1: <image>Picture 2: <image>" + prompt`, so those are the only
+    labels present in the model's context. The sockets are called image1 and
+    image2, but a socket name never reaches the model and cannot be bound to.
+    The same wording serves the manual path, where a human uploading two files
+    to Gemini reads "Picture 1" far more easily than "image1".
+    """
+    assert "Picture 1" in config.REFERENCES_BLOCK
+    assert "Picture 2" in config.REFERENCES_BLOCK
+    assert "image1" not in config.REFERENCES_BLOCK
+    assert "image2" not in config.REFERENCES_BLOCK
 
 
 def test_the_references_block_appears_only_when_two_images_are_sent():
