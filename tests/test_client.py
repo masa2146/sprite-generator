@@ -120,21 +120,28 @@ def test_payload_declares_webp_mime_for_a_webp_reference():
     assert url.startswith("data:image/webp;base64,")
 
 
-def test_payload_sends_the_style_image_second():
-    """Order is the contract: the prompt's REFERENCES block calls the crop
-    "Image 1" and the style screenshot "Image 2"."""
+def test_two_images_are_labelled_beside_themselves_in_chat():
+    """chat has no role field, so the label has to sit next to its own image.
+    The names are the backend's slot names, which the prompt also uses."""
     jpeg = b"\xff\xd8\xff\xe0FAKEJPEGBYTES"
     content = orclient.build_payload(
         "m/model", "hello", structure_png=PNG, style_png=jpeg
     )["messages"][0]["content"]
-    assert len(content) == 3
+    assert [c["text"] for c in content if c["type"] == "text"] == [
+        "image1:", "image2:", "hello",
+    ]
     assert content[1]["image_url"]["url"] == f"data:image/png;base64,{B64}"
-    assert content[2]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert content[3]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
-def test_a_style_image_alone_is_still_sent():
-    content = orclient.build_payload("m/model", "hello", style_png=PNG)["messages"][0]["content"]
-    assert len(content) == 2
+def test_a_single_image_keeps_the_unlabelled_shape():
+    """One image cannot be confused with another, and this shape is the measured
+    one — labelling it would change a path that already works."""
+    for kwargs in ({"structure_png": PNG}, {"style_png": PNG}):
+        content = orclient.build_payload("m/model", "hello", **kwargs)["messages"][0]["content"]
+        assert content[0] == {"type": "text", "text": "hello"}
+        assert len(content) == 2
+        assert content[1]["type"] == "image_url"
 
 
 # --- images payload shape ---------------------------------------------------

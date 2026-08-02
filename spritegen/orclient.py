@@ -105,10 +105,20 @@ def build_payload(
     seed: int | None = None,
     style_png: bytes | None = None,
 ) -> dict:
-    # Order is the contract: the prompt's REFERENCES block calls the first image
-    # "image1 — the object to redraw" and the second "image2 — style only".
-    content: list[dict] = [{"type": "text", "text": prompt}]
-    content += [image_part(img) for img in (structure_png, style_png) if img]
+    # chat has no per-image role field, so the only thing that can tie an image
+    # to its job is text sitting next to it. With one image there is nothing to
+    # tie — that shape is left exactly as it was.
+    present = [(img, label) for img, label in
+               ((structure_png, "image1"), (style_png, "image2")) if img]
+    if len(present) < 2:
+        content: list[dict] = [{"type": "text", "text": prompt}]
+        content += [image_part(img) for img, _ in present]
+    else:
+        content = []
+        for img, label in present:
+            content.append({"type": "text", "text": f"{label}:"})
+            content.append(image_part(img))
+        content.append({"type": "text", "text": prompt})
     body = {
         "model": model,
         "modalities": ["image", "text"],
