@@ -115,7 +115,9 @@ def test_full_prompt_includes_prefix_asset_and_bg_clause_no_ratio():
     text = pack.full_prompt(hero)
     assert "ART STYLE  hypercasual asset, glossy" in text
     assert "round blue character" in text
-    assert BG_CLAUSE in text
+    # Capitalised on its own bullet line (a lowercase fragment between two
+    # capitalised bullets reads wrong); BG_CLAUSE itself is untouched.
+    assert BG_CLAUSE[0].upper() + BG_CLAUSE[1:] in text
     assert "aspect ratio" not in text
     assert text.endswith(config.FIXED_BANS)
 
@@ -144,7 +146,7 @@ def test_the_references_block_uses_the_backends_slot_names():
 
 def test_the_references_block_appears_only_when_two_images_are_sent():
     """build_one sends the style image beside an asset's own crop, never
-    instead of one — so the block that names Image 1 and Image 2 must not
+    instead of one — so the block that names image1 and image2 must not
     promise a second image an asset without a crop will never get."""
     _clear_env()
     spec = _write(REF_SPEC)
@@ -183,6 +185,15 @@ def test_plate_prompt_also_carries_prefix_and_bg_clause():
     assert "hypercasual asset, glossy" in text
     assert "a button, an icon, a character" in text
     assert BG_CLAUSE in text
+
+
+def test_output_block_asks_for_square_only_when_asked():
+    """The build path carries aspect ratio as a structured field and has a 4:1
+    status-bar asset, so its default must stay unaffected. brief.asset_prompt
+    (the manual path, pasted into tools with no aspect-ratio field) opts in —
+    "Square image." is the only thing asking for a square canvas there."""
+    assert "Square image." not in config.output_block()
+    assert "Square image." in config.output_block(square=True)
 
 
 def test_precedence_cli_beats_spec_beats_env_beats_default():

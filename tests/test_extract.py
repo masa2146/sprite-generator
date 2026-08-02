@@ -524,7 +524,7 @@ def test_extract_then_build_reaches_generation_without_a_style_bible():
         assert code == 0    # Critical 1: build reached generation, no style bible required
         assert not loaded.style_bible.exists()   # still never created
 
-        # Critical 1 + 2 pinned together: every asset's reference_png is its own
+        # Critical 1 + 2 pinned together: every asset's structure_png is its own
         # crop's bytes, not a style bible (there is none) and not None.
         assert set(calls) == {a.id for a in loaded.assets}
         for a in loaded.assets:

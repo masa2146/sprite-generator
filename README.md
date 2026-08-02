@@ -172,7 +172,7 @@ the most valuable thing in this flow, and it refuses before spending the vision 
 
 ```toml
 [style]
-reference = "refs/_style.png"    # the whole set's look — sent as Image 2 with every asset
+reference = "refs/_style.png"    # the whole set's look — sent as image2 beside an asset's own crop
 
 [[assets]]
 id        = "coin_front"

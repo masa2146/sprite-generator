@@ -221,10 +221,10 @@ def find_contents(objects) -> dict:
 def exclusion_names(ids) -> list[str]:
     """Humanised names for the ids a box swallows, capped and summarised.
 
-    Public because two callers format this same list into different sentences:
-    extract's own paragraph prompt and brief.py's DO NOT DRAW list. Capping and
-    pluralisation living in one place is the point — this pluralisation has been
-    wrong once already.
+    Public for exclusion_clause below, its one caller. Kept as its own function
+    anyway because the capping and pluralisation is the part that has been
+    wrong once already — worth testing in isolation from the sentence it ends
+    up in.
     """
     named = [i.replace("_", " ") for i in ids[:MAX_NAMED_CONTENTS]]
     rest = len(ids) - MAX_NAMED_CONTENTS

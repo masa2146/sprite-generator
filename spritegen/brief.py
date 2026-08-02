@@ -112,7 +112,7 @@ def asset_prompt(obj: dict, view: str, style: str, contents=None) -> str:
         config.REFERENCES_BLOCK,
         vision.field_block(obj, view),
         f"ART STYLE  {style.strip()}",
-        config.output_block(obj["id"].replace("_", " ")),
+        config.output_block(obj["id"].replace("_", " "), square=True),
         config.do_not_draw(exclude),
     ])
 

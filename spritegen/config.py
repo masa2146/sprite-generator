@@ -60,20 +60,32 @@ REFERENCES_BLOCK = (
     "  and lighting. Do not copy any object from it."
 )
 
-def output_block(subject: str = "of the object described above") -> str:
+def output_block(subject: str = "copy of the object described above",
+                  square: bool = False) -> str:
     """The OUTPUT block. `subject` names the thing when the caller knows it.
 
     The count is what matters — an unqualified prompt produced twelve balls in
     one image — but naming it is stronger where a name exists. A pack's asset id
     ("coin-front") is not one, so the build path leans on the default, which
     points at the OBJECT line the prompt already carries.
+
+    `square` appends "Square image." to the margin bullet. False by default so
+    the build path is unaffected: it carries aspect ratio as a structured field
+    and has a 4:1 status-bar asset, so it must never ask for a square canvas.
+    brief.asset_prompt passes True — pasting into Gemini/ChatGPT by hand has no
+    aspect-ratio field, so that clause is the only thing asking for a square
+    canvas on that path.
     """
+    margin = "- Small even margin on all sides." + (" Square image." if square else "")
     return (
         "OUTPUT\n"
         f"- Exactly one {subject}, on its own. Not a set, not a grid, not a sheet.\n"
         "- Centred and complete, nothing touching or cut off at the edges.\n"
-        "- Small even margin on all sides.\n"
-        f"- {BG_CLAUSE}"
+        f"{margin}\n"
+        # Capitalised for display only — BG_CLAUSE itself (the single source of
+        # this wording, shared with plate_full_prompt and cmd_make where it sits
+        # mid-sentence) stays untouched.
+        f"- {BG_CLAUSE[0].upper()}{BG_CLAUSE[1:]}"
     )
 
 

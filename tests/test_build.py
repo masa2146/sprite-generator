@@ -566,16 +566,21 @@ def test_pick_style_bible_path_blocked_reports_an_error_not_a_traceback():
 
 
 def test_build_runs_after_init_and_pick():
-    """End-to-end wiring: the bible written by pick is the reference build sends."""
+    """End-to-end wiring: the bible written by pick is the reference build sends.
+
+    Limited to the pack's two cutout=true assets — its cutout=false asset
+    (bg_sky) gets no style image at all, covered separately by
+    test_a_non_cutout_asset_gets_no_style_image_either.
+    """
     tmp = tempfile.mkdtemp()
     spec = _spec_file()
     with _Stubs(_plate_outcomes()):
         cli.main(["init", str(spec), "--out-root", tmp, "--no-open"])
     cli.main(["pick", str(spec), "1", "--out-root", tmp])
-    with _Stubs([(b"A", 0.0), (b"B", 0.0), (b"C", 0.0)]) as stubs:
-        code = cli.main(["build", str(spec), "--out-root", tmp])
+    with _Stubs([(b"A", 0.0), (b"B", 0.0)]) as stubs:
+        code = cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play,icon_coin"])
     assert code == 0
-    assert stubs.styles == [PLATES[1], PLATES[1], PLATES[1]]
+    assert stubs.styles == [PLATES[1], PLATES[1]]
 
 
 def test_contact_sheet_is_a_two_by_two_grid():
@@ -987,14 +992,16 @@ def test_the_style_bible_travels_as_a_style_reference_not_a_structure():
     """The bible is an example of the look, never a silhouette to trace.
 
     Sent as a structure it comes back copied: spritepipe's README records three
-    different prompts returning three copies of exactly this image.
+    different prompts returning three copies of exactly this image. Limited to
+    the pack's two cutout=true assets — its cutout=false asset (bg_sky) gets no
+    style image at all, covered by test_a_non_cutout_asset_gets_no_style_image_either.
     """
     tmp = tempfile.mkdtemp()
     spec = _prepare(tmp)
-    with _Stubs([(b"A", 0.0), (b"B", 0.0), (b"C", 0.0)]) as stubs:
-        cli.main(["build", str(spec), "--out-root", tmp])
-    assert stubs.structures == [None, None, None]
-    assert stubs.styles == [b"BIBLE", b"BIBLE", b"BIBLE"]
+    with _Stubs([(b"A", 0.0), (b"B", 0.0)]) as stubs:
+        cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play,icon_coin"])
+    assert stubs.structures == [None, None]
+    assert stubs.styles == [b"BIBLE", b"BIBLE"]
 
 
 def test_the_style_image_rides_along_with_an_assets_own_crop():
@@ -1025,7 +1032,7 @@ def test_an_asset_with_no_crop_gets_the_bible_as_its_style_image():
 
 
 def test_a_missing_style_reference_fails_the_asset_rather_than_lying():
-    """full_prompt has already promised the model an Image 2 by then."""
+    """full_prompt has already promised the model an image2 by then."""
     tmp = tempfile.mkdtemp()
     spec, _refs = _spec_with_style_reference(tmp, "refs/gone.png")
     with _Stubs({"btn_play": (b"A", 0.04)}) as stubs:
@@ -1034,6 +1041,49 @@ def test_a_missing_style_reference_fails_the_asset_rather_than_lying():
     assert stubs.prompts == []
     records = {r["id"]: r for r in _manifest(tmp, "hc_v1")}
     assert "[style] reference" in records["btn_play"]["error"]
+
+
+def test_an_empty_asset_reference_fails_the_asset_rather_than_lying():
+    """A zero-byte crop file reads fine (no OSError) but is falsy like a missing
+    one — orclient's `if img` would send the style image alone against a
+    prompt that says 'image1 — the object to redraw'."""
+    tmp = tempfile.mkdtemp()
+    spec = _spec_with_btn_play_reference(tmp, "refs/own.png")
+    refs = spec.parent / "refs"
+    refs.mkdir(exist_ok=True)
+    (refs / "own.png").write_bytes(b"")
+    with _Stubs({"btn_play": (b"A", 0.04)}) as stubs:
+        code = cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+    assert code == 1
+    assert stubs.prompts == []
+    records = {r["id"]: r for r in _manifest(tmp, "hc_v1")}
+    assert "empty" in records["btn_play"]["error"]
+
+
+def test_an_empty_style_reference_fails_the_asset_rather_than_lying():
+    """Same guard, for the pack's [style] reference."""
+    tmp = tempfile.mkdtemp()
+    spec, refs = _spec_with_style_reference(tmp)
+    (refs / "_style.png").write_bytes(b"")
+    with _Stubs({"btn_play": (b"A", 0.04)}) as stubs:
+        code = cli.main(["build", str(spec), "--out-root", tmp, "--only", "btn_play"])
+    assert code == 1
+    assert stubs.prompts == []
+    records = {r["id"]: r for r in _manifest(tmp, "hc_v1")}
+    assert "empty" in records["btn_play"]["error"]
+
+
+def test_a_non_cutout_asset_gets_no_style_image_either():
+    """full_prompt's early return for cutout=false names no images at all, so
+    the payload must not carry one either — otherwise chat would carry a bare
+    'image2:' label the prompt never defines."""
+    tmp = tempfile.mkdtemp()
+    spec, _refs = _spec_with_style_reference(tmp)
+    with _Stubs({"bg_sky": (b"A", 0.04)}) as stubs:
+        code = cli.main(["build", str(spec), "--out-root", tmp, "--only", "bg_sky"])
+    assert code == 0
+    assert stubs.structures == [None]
+    assert stubs.styles == [None]
 
 
 def test_a_missing_asset_reference_fails_only_that_asset():

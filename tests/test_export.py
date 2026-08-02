@@ -65,6 +65,49 @@ def test_an_asset_without_a_reference_says_so():
         assert "data:image/" not in html
 
 
+def _pack_with_style_reference(tmp, n_assets=1):
+    """A pack whose [style] carries a reference AND whose asset(s) carry their
+    own — the condition under which build_one sends both images."""
+    refs = Path(tmp) / "refs"
+    refs.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (20, 20), (200, 30, 30)).save(refs / "alpha.png")
+    Image.new("RGB", (30, 30), (30, 200, 30)).save(refs / "_style.png")
+    spec = Path(tmp) / "p.toml"
+    assets = "".join(
+        f'[[assets]]\nid = "asset{i}"\nprompt = "a cube"\nreference = "refs/alpha.png"\n'
+        for i in range(n_assets)
+    )
+    spec.write_text(
+        '[api]\nbase_url = "https://example.test/v1"\nkey_env = ""\n'
+        '[pack]\nmodel = "m/model"\n'
+        '[style]\nprefix = "glossy style"\nplate_prompt = "x"\n'
+        'reference = "refs/_style.png"\n'
+        + assets
+    )
+    return config.load_pack(spec, out_root=Path(tmp) / "out")
+
+
+def test_the_page_shows_both_images_when_the_asset_gets_both():
+    """wire_prompt's REFERENCES block names image1 and image2 whenever an
+    asset has its own reference AND the pack has a style reference — the page
+    must not misrepresent that by showing only one."""
+    with tempfile.TemporaryDirectory() as tmp:
+        pack = _pack_with_style_reference(tmp)
+        html = export.page(pack, pack.assets, "t")
+        assert html.count("<img ") == 2  # style reference, and the asset's own crop
+        assert "image1" in html and "image2" in html
+
+
+def test_the_shared_style_image_is_inlined_only_once():
+    """Repeating the pack's style image per matching asset would inline the
+    same base64 blob once per asset — brief.py's page() measured 55 MB doing
+    that across 17 assets."""
+    with tempfile.TemporaryDirectory() as tmp:
+        pack = _pack_with_style_reference(tmp, n_assets=3)
+        html = export.page(pack, pack.assets, "t")
+        assert html.count("<img ") == 4  # style reference once, plus one crop per asset
+
+
 def test_prompt_text_is_html_escaped():
     with tempfile.TemporaryDirectory() as tmp:
         pack, spec = _pack(tmp)

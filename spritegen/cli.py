@@ -86,7 +86,12 @@ def build_one(pack, asset, bible_png):
     """
     out_dir = pack.out_dir
     structure_png = None
-    style_png = bible_png
+    # A cutout=false asset (background, seamless tile) is the whole image:
+    # full_prompt's early return for it names no images at all, so it must not
+    # get a style image either — sending one anyway would put a role/label on
+    # the wire (an "image2:" text label on chat, a style role on images) that
+    # the prompt never mentions.
+    style_png = bible_png if asset.cutout else None
     if asset.reference is not None:
         try:
             structure_png = asset.reference.read_bytes()
@@ -94,11 +99,18 @@ def build_one(pack, asset, bible_png):
             # Fail this asset only — the pack's other assets are unaffected.
             return _record(pack, asset, "failed",
                            error=f"cannot read reference {asset.reference}: {exc}")
+        if not structure_png:
+            # A zero-byte crop reads as truthy to a Path/read succeeding, but
+            # orclient's `if img` sends nothing for it — sending the style
+            # image alone would be exactly the lie full_prompt's "image1 — the
+            # object to redraw" promises against.
+            return _record(pack, asset, "failed",
+                           error=f"reference {asset.reference} is empty")
         # With its own crop the asset does not need the bible: the pack's own
         # style image is the better look source, and where there is none the
         # style prefix carries the look on words alone.
         style_png = None
-        if pack.style_reference is not None:
+        if asset.cutout and pack.style_reference is not None:
             try:
                 style_png = pack.style_reference.read_bytes()
             except OSError as exc:
@@ -107,6 +119,10 @@ def build_one(pack, asset, bible_png):
                 return _record(pack, asset, "failed",
                                error=f"cannot read [style] reference "
                                      f"{pack.style_reference}: {exc}")
+            if not style_png:
+                return _record(pack, asset, "failed",
+                               error=f"[style] reference {pack.style_reference} "
+                                     "is empty")
     try:
         png, cost, _raw = orclient.generate(
             pack,

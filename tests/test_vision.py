@@ -385,10 +385,10 @@ def test_analyze_objects_normalises_views_against_the_pool():
     """Important 5: analyze_objects must actually run every object's "views"
     through normalise_views, not just parse them as-is. OBJECTS_REPLY's
     bunny_white carries a rogue "isometric" view the model returned despite
-    the prompt's closed list — a schema that reached extract._asset_prompt
-    with that name would silently fall back to VIEW_POOL[DEFAULT_VIEW] there
-    (extract.py's .get with a default), producing an asset named
-    "bunny_white-isometric" whose prompt actually says "front"."""
+    the prompt's closed list — a schema that reached vision.field_block with
+    that name would silently fall back to VIEW_POOL[DEFAULT_VIEW] there (its
+    .get with a default), producing an asset named "bunny_white-isometric"
+    whose prompt actually says "front"."""
     (schema, _), rec = _run_objects([_Resp(200, _body(json.dumps(OBJECTS_REPLY)))])
     for obj in schema["objects"]:
         for v in obj["views"]:
