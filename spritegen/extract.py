@@ -284,7 +284,7 @@ def pack_text(model: str, key_env: str, style: dict, objects, refs_dir, pack_pat
         'plate_prompt = "a representative object from this set"',
     ]
     if style_image is not None:
-        # The source screenshot, sent beside every crop as Image 2. Text alone
+        # The source screenshot, sent beside every crop as image2. Text alone
         # does not carry a palette.
         lines.append("reference = " + packwriter.toml_string(rel_to_pack(style_image)))
     lines += [

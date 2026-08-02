@@ -189,6 +189,14 @@ asset already gets the style bible, and a second style image would say the same 
 twice. `exclude` is what the crop shows but the sprite must not have — `extract` fills it
 in for any object whose box swallows another.
 
+Each reference declares the job it does. The `images` transport sends
+`role: "structure"` for the asset's own crop and `role: "style"` for the pack's
+style image; the `chat` transport has no such field, so it labels each image
+`image1:` / `image2:` in the text right before it. Those are the names the
+prompt's `REFERENCES` block uses, and they are the input slot names of the local
+backend's edit graph — a reference with no role is treated as a style hint and,
+on a text-to-image graph, never used at all.
+
 ### The prompt `build` sends
 
 A sprite prompt is labelled blocks, not one sentence, because the clause a model skips is
@@ -196,7 +204,7 @@ the one buried mid-sentence. Both paths compose the same blocks from the same st
 `config.py`:
 
 ```
-REFERENCES     (only when two images go on the wire)
+REFERENCES     (image1 / image2 — only when two images go on the wire)
 OBJECT / FORM / DETAIL / VIEW      <- the asset's own prompt
 ART STYLE      <- [style] prefix
 OUTPUT         <- exactly one, centred, complete, flat #808080

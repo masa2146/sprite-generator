@@ -133,6 +133,15 @@ def test_a_sprite_prompt_carries_every_block_in_order():
     assert "any text, numbers, labels or logos" in text
 
 
+def test_the_references_block_uses_the_backends_slot_names():
+    """image1/image2 are what TextEncodeQwenImageEditPlus calls its inputs; a
+    prompt that says "Image 1" instead names nothing the graph knows."""
+    assert "image1" in config.REFERENCES_BLOCK
+    assert "image2" in config.REFERENCES_BLOCK
+    assert "Image 1" not in config.REFERENCES_BLOCK
+    assert "Image 2" not in config.REFERENCES_BLOCK
+
+
 def test_the_references_block_appears_only_when_two_images_are_sent():
     """build_one sends the style image beside an asset's own crop, never
     instead of one — so the block that names Image 1 and Image 2 must not

@@ -165,7 +165,7 @@ def page(entries, style_image: Path, title: str) -> str:
     out += [
         "<figure class='style'>",
         f"<img src='{style_uri}' alt=''>",
-        f"<figcaption>Image 2 — {html.escape(style_image.name)} — upload this "
+        f"<figcaption>image2 — {html.escape(style_image.name)} — upload this "
         "with EVERY message, alongside the crop</figcaption>",
         "</figure>",
     ]
@@ -176,8 +176,8 @@ def page(entries, style_image: Path, title: str) -> str:
             f"<h2>{html.escape(entry['id'])}</h2>",
             "<div class='row'>",
             f"<figure><img src='{_data_uri(crop)}' alt=''>"
-            f"<figcaption>Image 1 — {html.escape(crop.name)}</figcaption></figure>",
-            f"<p class='pair'>+ Image 2 — {html.escape(style_image.name)}</p>",
+            f"<figcaption>image1 — {html.escape(crop.name)}</figcaption></figure>",
+            f"<p class='pair'>+ image2 — {html.escape(style_image.name)}</p>",
             "</div>",
             f"<pre>{html.escape(entry['prompt'])}</pre>",
             "</div>",

@@ -38,7 +38,7 @@ BG_CLAUSE = ("isolated on flat solid #808080 neutral grey background, no shadow,
 # failures were twelve balls instead of one and HUD labels that kept their text.
 # The blocks live here, not in either caller, so the paid and manual paths
 # cannot drift apart.
-# Image 1 needs both halves of its instruction. "Reproduce THIS object" alone
+# image1 needs both halves of its instruction. "Reproduce THIS object" alone
 # got the object reproduced faithfully -- including the fact that the crop is a
 # 52x60 lift from a phone screenshot. The render came back as hard-outlined
 # pixel art against a style prefix asking in so many words for "flat
@@ -50,13 +50,13 @@ BG_CLAUSE = ("isolated on flat solid #808080 neutral grey background, no shadow,
 # separates identity from rendering.
 REFERENCES_BLOCK = (
     "REFERENCES\n"
-    "- Image 1 — the object to redraw. Take its IDENTITY from this and nothing\n"
+    "- image1 — the object to redraw. Take its IDENTITY from this and nothing\n"
     "  else: silhouette, proportions, colours, markings, features.\n"
-    "  Do NOT take its rendering. Image 1 is a small low-resolution screen\n"
+    "  Do NOT take its rendering. image1 is a small low-resolution screen\n"
     "  capture; its pixellation, blocky stair-stepped edges and colour banding\n"
     "  are capture artefacts, not design. Redraw the object cleanly at full\n"
     "  resolution in the ART STYLE below.\n"
-    "- Image 2 — the reference screenshot. Use it ONLY for art style, palette\n"
+    "- image2 — the reference screenshot. Use it ONLY for art style, palette\n"
     "  and lighting. Do not copy any object from it."
 )
 
@@ -123,7 +123,7 @@ class Pack:
     model: str
     style_prefix: str
     plate_prompt: str
-    # The image the whole pack was derived from, sent as Image 2 beside each
+    # The image the whole pack was derived from, sent as image2 beside each
     # asset's own crop. Text alone loses the palette: the manual path measured a
     # generic grey object from the version that sent no style image.
     style_reference: Path | None = None

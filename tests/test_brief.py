@@ -135,7 +135,7 @@ def test_the_prompt_labels_what_each_uploaded_image_is_for():
     had to guess which image to copy and which was only the art style."""
     text = brief.asset_prompt(_obj(), "front", STYLE)
     assert "REFERENCES" in text
-    assert "Image 1" in text and "Image 2" in text
+    assert "image1" in text and "image2" in text
     assert "ONLY for art style" in text
 
 
