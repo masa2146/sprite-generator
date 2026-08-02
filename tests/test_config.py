@@ -5,6 +5,9 @@ from pathlib import Path
 
 from spritegen import config
 from spritegen import envfile
+# A Windows absolute path carries backslashes, which a raw TOML basic string
+# would read as escapes — encode it the same way the pack writer does.
+from spritegen.packwriter import toml_string
 
 from spritegen.config import (
     BG_CLAUSE,
@@ -640,13 +643,21 @@ def test_reference_is_none_when_absent():
 def test_an_absolute_reference_is_not_joined_to_the_pack_dir():
     """Absolute means absolute — it must not be resolved relative to the pack.
 
-    Both branches call .resolve(), so the expected value is resolved too;
-    on macOS /tmp is a symlink to /private/tmp and the literal would not match.
+    The absolute path is built from a real temp directory rather than written
+    as a "/tmp/..." literal: on Windows a leading slash with no drive letter is
+    a *rooted* path, not an absolute one, so the literal exercised the joining
+    branch on that platform and asserted a drive letter that came from the cwd.
+
+    Both branches call .resolve(), so the expected value is resolved too; on
+    macOS /tmp is a symlink to /private/tmp and an unresolved literal would not
+    match either.
     """
     _clear_env()
-    spec = _write(REF_SPEC.replace('"refs/thing.png"', '"/tmp/abs/thing.png"'))
+    absolute = Path(tempfile.mkdtemp()).resolve() / "abs" / "thing.png"
+    spec = _write(REF_SPEC.replace('"refs/thing.png"',
+                                   toml_string(str(absolute))))
     ref = {a.id: a for a in load_pack(spec).assets}["with_ref"].reference
-    assert ref == Path("/tmp/abs/thing.png").resolve()
+    assert ref == absolute
     assert spec.parent not in ref.parents      # the real invariant: no join happened
 
 
