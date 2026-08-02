@@ -130,3 +130,19 @@ raw dosya bu yüzden diskte kaldı. `rembg`'in bu zemini gerçekte nasıl kesti�
   render stilini (pixel-art blokluluk) ve yasaklanan metni (rakamlar) de
   taşıyor gibi görünüyor; pack'in `ART STYLE` maddesi bu tek örnekte
   uygulanmamış görünüyor.
+
+## İncelemeden park edilen bulgular (düzeltilmedi, kayda geçti)
+
+Dal genelindeki son incelemenin ardından tek bir düzeltme turu yapıldı ve altı
+bulgu da kapatıldı. Kapatma turunun kendi incelemesi üç şeyi açık bıraktı;
+üçü de yol kesici değil, o yüzden düzeltilmeden kaydedildi:
+
+- `export.py`'nin "iki görsel alan asset" kümesi `cutout`'a bakmıyor.
+  `build_one` artık `cutout = false` bir asset'e style görseli göndermiyor, ama
+  export sayfası aynı asset için hâlâ `image2` gösterir. Elle yazılmış bir pack
+  gerektiriyor — `extract` `cutout = false` üretmiyor.
+- `build_one`, `cutout = false` bir asset'in kendi crop'unu hâlâ `structure_png`
+  olarak gönderiyor, oysa o asset'in prompt'u hiçbir görselden söz etmiyor.
+  Yukarıdakiyle aynı kökten; ikisi birlikte düzeltilmeli.
+- `655c594` commit'inin başlığı Türkçe (diğerleri İngilizce) ve `2e8daef`'in
+  trailer'ında `(1M context)` eksik. Geçmişi yeniden yazmaya değmez.
