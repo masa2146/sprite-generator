@@ -15,6 +15,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from . import packwriter
+from . import post
 from . import vision
 
 MIN_EDGE = 16              # smaller than this cannot be a usable sprite
@@ -243,6 +244,97 @@ def exclusion_clause(ids) -> str:
             + " visible inside it in the reference image")
 
 
+def ring_median(image, box, margin: int = 6) -> tuple[int, int, int]:
+    """The median colour of a band just outside `box` in the source image.
+
+    What should show through a hole is whatever surrounds the hole, and that is
+    a different colour for every hole: board around a brick field, pink body
+    around a number printed on it. One global estimate cannot serve both — and
+    a global one taken from the image's border served neither, because a phone
+    screenshot's border is its letterbox bars, so every blanked box came back
+    a black slab.
+
+    The median *pixel*, never a per-channel median, which can name a colour
+    that is nowhere in the band.
+    """
+    x1, y1, x2, y2 = (int(v) for v in box)
+    outer = (max(0, x1 - margin), max(0, y1 - margin),
+             min(image.width, x2 + margin), min(image.height, y2 + margin))
+    rgb = image.convert("RGB")
+    band = [p for i, p in enumerate(rgb.crop(outer).getdata())
+            if not (margin <= i % (outer[2] - outer[0]) < (outer[2] - outer[0]) - margin
+                    and margin <= i // (outer[2] - outer[0]) < (outer[3] - outer[1]) - margin)]
+    if not band:
+        band = list(rgb.crop(outer).getdata())
+    band.sort(key=lambda p: (p[0] * 299 + p[1] * 587 + p[2] * 114, p))
+    return band[len(band) // 2]
+
+
+def blank_contents(kept, contents, image) -> list[str]:
+    """Paint each framing object's contents out of its own crop.
+
+    The `exclude` clause says it in words, and words lose. REFERENCES tells the
+    model to take the object's identity from Picture 1 — silhouette, colours,
+    markings — and a conveyor crop that still shows the brick field, the
+    dispenser and the nozzle is far stronger evidence than a DO NOT DRAW bullet
+    is a counterweight. The first live loop came back with the whole board
+    drawn inside it. Blanking the boxes makes the picture and the text say the
+    same thing.
+
+    Each hole is filled from its own surroundings — see ring_median. A single
+    fill for the whole image cannot be right for both a brick field inside a
+    loop and a number printed on a pink body, and taking that single fill from
+    the image's border was worse still: a phone screenshot's border is its
+    letterbox bars, so every blanked box came back a black slab.
+
+    Returns the ids whose crops were rewritten.
+    """
+    by_id = {obj["id"]: obj for obj in kept}
+    framed = {inner for ids in contents.values() for inner in ids}
+    touched = []
+    for obj in kept:
+        obj_id = obj["id"]
+        inner_ids = contents.get(obj_id) or []
+        # Boxes the analysis asked for by hand: a number printed on a body, a
+        # neighbour the padding dragged in. Whatever the model must not copy has
+        # to leave the picture — forbidding it in words loses every time.
+        hand = [b for b in (obj.get("blank") or [])
+                if isinstance(b, (list, tuple)) and len(b) == 4]
+        # The padding ring of an object that sits inside another one is that
+        # other one's wall, by construction. Blanking ran one way only, so a
+        # dispenser's crop lost the projectile while the projectile's crop kept
+        # half a dispenser — and on a 26px object the walls are most of what
+        # the model is shown.
+        walls = obj_id in framed
+        if not (inner_ids or hand or walls) or not obj.get("crop"):
+            continue
+
+        with Image.open(obj["crop"]) as opened:
+            crop = opened.convert("RGB")
+        ox1, oy1, _, _ = padded_box(obj["bbox"], image.width, image.height)
+        draw = ImageDraw.Draw(crop)
+
+        if walls:
+            x1, y1, x2, y2 = (int(v) for v in obj["bbox"])
+            # The ring outside this object's own box is the housing's wall, so
+            # what belongs there is what surrounds the housing, not what
+            # surrounds the object.
+            container = next((by_id[o]["bbox"] for o, ids in contents.items()
+                              if obj_id in ids and o in by_id), obj["bbox"])
+            ring = Image.new("RGB", crop.size, ring_median(image, container))
+            ring.paste(crop.crop((x1 - ox1, y1 - oy1, x2 - ox1, y2 - oy1)),
+                       (x1 - ox1, y1 - oy1))
+            crop = ring
+            draw = ImageDraw.Draw(crop)
+        for box in [by_id[i]["bbox"] for i in inner_ids if i in by_id] + hand:
+            ix1, iy1, ix2, iy2 = (int(v) for v in box)
+            draw.rectangle((ix1 - ox1, iy1 - oy1, ix2 - ox1, iy2 - oy1),
+                           fill=ring_median(image, box))
+        crop.save(obj["crop"])
+        touched.append(obj_id)
+    return touched
+
+
 def pack_text(model: str, key_env: str, style: dict, objects, refs_dir, pack_path,
               style_image=None) -> str:
     """The complete pack TOML: one [[assets]] per object per view.
@@ -256,7 +348,9 @@ def pack_text(model: str, key_env: str, style: dict, objects, refs_dir, pack_pat
     key_env = "", not dropped.
     """
     refs_dir, pack_path = Path(refs_dir), Path(pack_path)
-    prefix = vision.style_prefix({"style": style})
+    # brief.py's analysis carries `style` as the one line a human wrote; the
+    # vision path carries the six-field schema. Both are the pack's prefix.
+    prefix = style.strip() if isinstance(style, str) else vision.style_prefix({"style": style})
     contents = find_contents(objects)
 
     def rel_to_pack(path) -> str:
@@ -313,6 +407,19 @@ def pack_text(model: str, key_env: str, style: dict, objects, refs_dir, pack_pat
             if exclude:
                 lines.append("exclude   = "
                              + packwriter.toml_string(exclusion_clause(exclude)))
+            degrees = vision.ROTATION_DEGREES.get(view)
+            if degrees:
+                # Turned from the front frame rather than generated. The backend
+                # ignores a plane rotation asked for in words — three rotated
+                # frames came back upright, differing only in finish — and even
+                # one that obeyed would be redrawing the object each time.
+                lines += [
+                    "derive_from = " + packwriter.toml_string(
+                        "{}-{}".format(obj["id"], vision.DEFAULT_VIEW)),
+                    "rotate      = {}".format(degrees),
+                    "",
+                ]
+                continue
             lines += [
                 "reference = " + packwriter.toml_string(rel),
                 "",

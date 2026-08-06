@@ -154,18 +154,27 @@ def test_the_references_block_names_the_images_the_way_the_model_sees_them():
     assert "image2" not in config.REFERENCES_BLOCK
 
 
-def test_the_references_block_appears_only_when_two_images_are_sent():
-    """build_one sends the style image beside an asset's own crop, never
-    instead of one — so the block that names image1 and image2 must not
-    promise a second image an asset without a crop will never get."""
+def test_the_references_block_names_exactly_the_pictures_that_are_sent():
+    """build_one sends an asset's own crop as Picture 1 and the pack's style
+    reference alongside it as Picture 2. The block must name those and only
+    those: promising a picture that never arrives is one failure, and
+    withholding Picture 1's guidance because Picture 2 is absent is the other —
+    that one brought back sleepers a DO NOT DRAW bullet had been holding off."""
     _clear_env()
     spec = _write(REF_SPEC)
     pack = load_pack(spec)
     by_id = {a.id: a for a in pack.assets}
-    assert "REFERENCES" not in pack.full_prompt(by_id["with_ref"])
+
+    # A crop and no style reference: Picture 1 only.
+    solo = pack.full_prompt(by_id["with_ref"])
+    assert "Picture 1" in solo
+    assert "Picture 2" not in solo
 
     pack.style_reference = spec.parent / "screenshot.png"
-    assert "REFERENCES" in pack.full_prompt(by_id["with_ref"])
+    both = pack.full_prompt(by_id["with_ref"])
+    assert "Picture 1" in both and "Picture 2" in both
+
+    # No crop of its own: nothing is Picture 1, so name nothing.
     assert "REFERENCES" not in pack.full_prompt(by_id["without_ref"])
 
 
@@ -687,3 +696,24 @@ def test_reference_does_not_have_to_exist_at_load_time():
     pack = load_pack(_write(REF_SPEC))
     assert pack.assets[0].reference is not None      # no exception, no existence check
 
+
+
+def test_a_full_bleed_asset_keeps_its_references_and_bans():
+    """cutout = false used to collapse the whole prompt to "prefix body". A
+    tileable run of track then lost the bans holding its profile continuous,
+    and — worse — kept asking for a #808080 backdrop it must not have, so the
+    corners came back in the sprite's own colour and the cut erased it."""
+    _clear_env()
+    spec = _write(FULL_SPEC)
+    pack = load_pack(spec)
+    pack.style_reference = spec.parent / "screenshot.png"
+    sky = {a.id: a for a in pack.assets}["bg_sky"]
+    sky.reference = spec.parent / "tile.png"
+    sky.exclude = "any join down the middle"
+
+    text = pack.full_prompt(sky)
+    assert BG_CLAUSE not in text
+    assert "Exactly one" not in text          # it is not one subject on a backdrop
+    assert "fills the frame edge to edge" in text
+    assert "Picture 1" in text
+    assert "DO NOT DRAW\n- any join down the middle" in text

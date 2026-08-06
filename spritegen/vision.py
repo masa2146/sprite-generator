@@ -21,6 +21,12 @@ STYLE_FIELDS = ("render", "camera", "lighting", "palette", "linework", "realism"
 # Join order for prompt text, deliberately different from STYLE_FIELDS: palette
 # reads best last, after the visual description it tints.
 _JOIN_ORDER = ("render", "camera", "lighting", "linework", "realism", "palette")
+# A pack's [style] prefix drops "camera". The prefix is prepended to every
+# asset, beside that asset's own VIEW line, so an angle in it contradicts every
+# view but the one it happens to name: an extracted prefix reading "fixed
+# top-down orthographic view of a vertical portrait playfield" fought "VIEW
+# seen from directly the front" on every front, side and three-quarter asset.
+_PACK_ORDER = tuple(f for f in _JOIN_ORDER if f != "camera")
 
 # Subject-side fields: what the object IS and how it is built. These never
 # enter a pack's [style] prefix — that prefix is applied to every asset, and
@@ -134,8 +140,12 @@ def validate_schema(schema: dict) -> list[str]:
     return missing
 
 
-def style_prefix(schema: dict) -> str:
+def style_prefix(schema: dict, camera: bool = False) -> str:
     """The pack's [style] prefix: style fields only, never the subject.
+
+    `camera` is off by default because the prefix's job is to be applied to
+    every asset alongside its own VIEW line — see _PACK_ORDER. Only a caller
+    describing one whole image (reproduction_prompt) turns it back on.
 
     ponytail: nothing here structurally stops a model from writing the
     subject into a style field anyway (e.g. "render": "soft 3D render of a
@@ -150,14 +160,18 @@ def style_prefix(schema: dict) -> str:
     # must degrade to a shorter prefix, not crash a command that has already
     # paid for the vision call and written crops to disk.
     return ", ".join(
-        style[f].strip() for f in _JOIN_ORDER
+        style[f].strip() for f in (_JOIN_ORDER if camera else _PACK_ORDER)
         if isinstance(style.get(f), str) and style[f].strip()
     )
 
 
 def reproduction_prompt(schema: dict) -> str:
-    """A ready prompt for regenerating this image: subject first, then style."""
-    return f"{schema['subject'].strip()}, {style_prefix(schema)}"
+    """A ready prompt for regenerating this image: subject first, then style.
+
+    Camera included: this one describes the whole image as framed, and there is
+    no per-asset VIEW line here to contradict.
+    """
+    return f"{schema['subject'].strip()}, {style_prefix(schema, camera=True)}"
 
 
 def subject_prompt(schema: dict) -> str:
@@ -195,8 +209,23 @@ VIEW_POOL = {
     "side": "seen from directly the side, full profile",
     "back": "seen from directly behind",
     "top_down": "seen from directly above, top-down",
+    # Spin frames, not camera moves: the camera stays put and the object turns
+    # in the picture plane. A tumbling projectile needs these — asking for its
+    # side and top_down instead produces four pictures of a symmetrical slab
+    # that all look the same, and the rotation request ends up smuggled into
+    # "detail" as "needs four frames", which then fights OUTPUT's "exactly one".
+    "rotated_45": "seen from directly the front, the object itself rotated 45 degrees clockwise within the picture plane",
+    "rotated_90": "seen from directly the front, the object itself rotated 90 degrees clockwise within the picture plane",
+    "rotated_135": "seen from directly the front, the object itself rotated 135 degrees clockwise within the picture plane",
 }
 DEFAULT_VIEW = "front"
+
+# A plane rotation is arithmetic, not art, and the backend does not do it: asked
+# for three rotated frames of a projectile it returned three upright ones with
+# different finishes. Rotating the front frame instead is exact, free, and
+# guarantees the frames are the same object — which generating them separately
+# never can.
+ROTATION_DEGREES = {"rotated_45": 45, "rotated_90": 90, "rotated_135": 135}
 
 # Labelled lines, one field per line, because a model skips a clause buried in a
 # sentence but answers a field it can see. "state" only exists on hand-written
@@ -217,6 +246,13 @@ def field_block(obj: dict, view: str) -> str:
         for key, label in FIELD_LABELS
         if isinstance(obj.get(key), str) and obj[key].strip()
     ]
+    # Measured off the crop, not described. A vision model called a conveyor's
+    # channel "pale lilac-white" when it is #434375, and the sprite came back
+    # pale until the real value was in the prompt.
+    swatches = [c for c in (obj.get("palette") or []) if isinstance(c, str)]
+    if swatches:
+        lines.append("{:<10} {}".format("PALETTE", ", ".join(swatches)
+                                        + " — the colours actually present in Picture 1"))
     phrase = VIEW_POOL.get(view, VIEW_POOL[DEFAULT_VIEW])
     lines.append("{:<10} {}".format("VIEW", phrase))
     return "\n".join(lines)
@@ -271,9 +307,28 @@ Rules:
   with some extra background around it is fine.
 - "animated" is true for anything that moves, rotates, is launched or is
   carried during play. A fixed wall, rail or backdrop panel is not animated.
-- "views" may only contain: front, three_quarter, side, back, top_down.
+- "views" may only contain: front, three_quarter, side, back, top_down,
+  rotated_45, rotated_90, rotated_135.
   For an animated object list at least three views the game would actually
   need. For anything not animated list exactly one.
+  The rotated_* names turn the object in the picture plane rather than moving
+  the camera. Use them, not camera angles, for anything that spins or tumbles
+  in flight — a projectile needs ["front", "rotated_45", "rotated_90",
+  "rotated_135"], not its side and top.
+- "views" is the ONLY place a pose belongs. Never write a rotation, an angle,
+  a frame count or a sheet layout into "subject", "form" or "detail" — each
+  view is generated as its own single image, so "four frames of..." in a
+  description asks one picture to be four.
+- Numbers, letters and labels printed on an object are gameplay VARIABLES, not
+  design. The game draws its own value over the finished sprite, and the
+  generation prompt these descriptions feed forbids text outright — so naming
+  one here only makes the two halves of that prompt contradict each other, and
+  the sprite comes back with a number baked into it. Never put a glyph, a
+  numeral or its value in "subject", "form" or "detail". Describe the blank
+  surface that carries it instead, and say it is empty: "a slightly darker oval
+  patch across the belly, left blank" rather than "a white 40 on the belly".
+  For an object that is nothing but text, describe its plate or badge and mark
+  it empty; if it has no plate either, leave it off the list entirely.
 - Reply with JSON only, no commentary."""
 
 OBJECT_USER_CLAUSE = """
@@ -305,6 +360,11 @@ def normalise_views(views, animated: bool) -> list[str]:
         return [DEFAULT_VIEW]
     wanted = {v for v in views if isinstance(v, str) and v in VIEW_POOL}
     ordered = [v for v in VIEW_POOL if v in wanted]
+    # A rotated frame is turned from the front frame, so asking for one without
+    # it leaves nothing to turn. Cheaper to add here than to fail at build time
+    # on a pack the user has already pruned.
+    if any(v in ROTATION_DEGREES for v in ordered) and DEFAULT_VIEW not in ordered:
+        ordered = [DEFAULT_VIEW] + ordered
     return ordered or [DEFAULT_VIEW]
 
 

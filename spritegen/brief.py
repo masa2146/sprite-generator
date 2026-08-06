@@ -26,6 +26,7 @@ from PIL import Image
 
 from . import config
 from . import extract
+from . import refclean
 from . import vision
 
 
@@ -41,7 +42,13 @@ def normalise_views(views) -> list[str]:
     through, because an unknown view would silently get the `front` phrase.
     """
     wanted = {v for v in views if isinstance(v, str)} if isinstance(views, list) else set()
-    return [v for v in vision.VIEW_POOL if v in wanted] or [vision.DEFAULT_VIEW]
+    ordered = [v for v in vision.VIEW_POOL if v in wanted]
+    # A rotated frame is turned from the front frame; without it there is
+    # nothing to turn.
+    if (any(v in vision.ROTATION_DEGREES for v in ordered)
+            and vision.DEFAULT_VIEW not in ordered):
+        ordered = [vision.DEFAULT_VIEW] + ordered
+    return ordered or [vision.DEFAULT_VIEW]
 
 
 def load_analysis(path) -> tuple[str, list[dict]]:
@@ -207,6 +214,9 @@ def main(argv=None) -> int:
                         help="directory to create; refused if it already holds a brief")
     parser.add_argument("--no-open", action="store_true",
                         help="do not open the contact sheet")
+    parser.add_argument("--pack", default=None, metavar="PATH",
+                        help="also write a buildable pack from this same analysis, "
+                             "for generating through a local endpoint instead of by hand")
     args = parser.parse_args(argv)
 
     image_path = Path(args.image)
@@ -249,10 +259,14 @@ def main(argv=None) -> int:
         return 1
 
     contents = extract.find_contents(kept)
+    extract.blank_contents(kept, contents, image)
+    # After blanking, which maps source-image boxes into crop coordinates that
+    # the upscale here would invalidate.
+    refclean.clean_crops(kept)
     for obj_id, inside in contents.items():
         print(f"note: {obj_id}'s box also contains {len(inside)} other object(s) "
-              f"({', '.join(inside)}) — its crop shows them too, and its prompt "
-              f"asks for it without them", file=sys.stderr)
+              f"({', '.join(inside)}) — they are blanked out of its crop, and its "
+              f"prompt asks for it without them", file=sys.stderr)
 
     style_copy = refs_dir / "_style.png"
     try:
@@ -285,6 +299,24 @@ def main(argv=None) -> int:
     except OSError as exc:
         print(f"error: cannot write {brief_path}: {exc}", file=sys.stderr)
         return 1
+
+    if args.pack:
+        # The same analysis, the same crops, the same prompt bodies — only the
+        # destination differs. Written on request rather than always, because
+        # this flow's whole point is that it costs nothing and needs no endpoint.
+        pack_path = Path(args.pack)
+        try:
+            pack = config.env_pack()
+            pack_path.parent.mkdir(parents=True, exist_ok=True)
+            pack_path.write_text(
+                extract.pack_text(pack.model, pack.key_env, style, kept,
+                                  refs_dir, pack_path, style_image=style_copy),
+                encoding="utf-8")
+            print(f"pack -> {pack_path}   (spritegen build {pack_path} --jobs 1)")
+        except (config.SpecError, OSError) as exc:
+            # The brief is the deliverable; a pack that could not be written
+            # must not cost the user the prompts and crops they already have.
+            print(f"warning: pack not written: {exc}", file=sys.stderr)
 
     print(f"\n{len(kept)} objects, {len(entries)} prompts -> {brief_path}")
     print(f"uploads -> {refs_dir}")

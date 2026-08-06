@@ -270,13 +270,15 @@ def test_a_backslash_or_triple_quote_in_a_style_field_does_not_break_the_toml():
     tmp = tempfile.mkdtemp()
     style = {f: f"{f}-value" for f in
              ("render", "camera", "lighting", "palette", "linework", "realism")}
-    style["camera"] = "50mm w\\ shallow DOF"
+    # Not "camera": that field is deliberately left out of a pack prefix, so a
+    # quoting bug hiding in it would never reach the TOML this asserts on.
+    style["render"] = "matte w\\ shallow DOF"
     style["lighting"] = 'has \"\"\" inside'
     kept, _ = extract.crop_objects(_img(), _objects(), Path(tmp) / "refs")
     text = extract.pack_text("m/model", "SPRITEGEN_API_KEY", style, kept,
                              Path(tmp) / "refs", Path(tmp) / "p.toml")
     d = tomllib.loads(text)
-    assert "50mm w\\ shallow DOF" in d["style"]["prefix"]
+    assert "matte w\\ shallow DOF" in d["style"]["prefix"]
     assert 'has """ inside' in d["style"]["prefix"]
 
 
@@ -768,3 +770,217 @@ def test_a_long_content_list_is_summarised_not_dumped():
     one_over = extract.exclusion_clause([f"thing_{i}" for i in range(5)])
     assert "and 1 other element" in one_over and "1 other elements" not in one_over
 
+
+
+def test_blank_contents_paints_a_framed_object_out_of_its_container_crop():
+    """`exclude` says it in words and words lose: REFERENCES tells the model to
+    take identity from Picture 1, so a loop crop still showing the brick field
+    gets the brick field drawn back in. The crop has to agree with the text."""
+    tmp = Path(tempfile.mkdtemp())
+    image = Image.new("RGB", (400, 400), (20, 20, 40))
+    # A bright inner object, entirely inside the outer object's box.
+    for x in range(150, 250):
+        for y in range(150, 250):
+            image.putpixel((x, y), (255, 0, 0))
+    objects = [
+        {"id": "loop", "bbox": [50, 50, 350, 350], "views": ["front"]},
+        {"id": "brick", "bbox": [150, 150, 250, 250], "views": ["front"]},
+    ]
+    kept, _ = extract.crop_objects(image, objects, tmp / "refs")
+    contents = extract.find_contents(kept)
+    assert contents == {"loop": ["brick"]}
+
+    before = Image.open(kept[0]["crop"]).convert("RGB")
+    assert (255, 0, 0) in before.getdata()
+    before.close()
+
+    # Both crops are rewritten now: the container loses what it frames, and the
+    # framed object loses the container's wall its own padding dragged in.
+    assert extract.blank_contents(kept, contents, image) == ["loop", "brick"]
+
+    after = Image.open(kept[0]["crop"]).convert("RGB")
+    try:
+        assert (255, 0, 0) not in after.getdata()
+        # Filled with the crop's own surroundings, not a foreign colour that
+        # would just become a new marking to copy.
+        assert after.getpixel((after.width // 2, after.height // 2)) == (20, 20, 40)
+    finally:
+        after.close()
+    # The framed object keeps its identity; only its padding ring is cleared.
+    inner = Image.open(kept[1]["crop"]).convert("RGB")
+    try:
+        assert (255, 0, 0) in inner.getdata()
+    finally:
+        inner.close()
+
+
+def test_refclean_removes_what_a_screenshot_adds():
+    """Three defects came back measured in generated sprites: the capture's
+    pixel steps as pixel art, its lighting ramp as a piece dark at one end, and
+    the phone's letterbox bars as black slabs. The prompt calls all three
+    capture artefacts and loses to the picture, so they go here."""
+    from spritegen import refclean
+
+    im = Image.new("RGB", (60, 40), (70, 70, 120))
+    for x in range(0, 4):                       # letterbox down the left
+        for y in range(40):
+            im.putpixel((x, y), (0, 0, 0))
+    out = refclean.strip_letterbox(im)
+    assert out.getpixel((1, 20)) != (0, 0, 0)
+    assert out.getpixel((30, 20)) == (70, 70, 120)
+
+    big = refclean.upscale(im, 240)
+    assert max(big.size) == 240
+    assert big.width / big.height == im.width / im.height
+    assert refclean.upscale(big, 100).size == big.size   # never downscales
+
+
+def test_row_flatten_erases_along_the_run_and_spares_the_rails():
+    """A straight run is one cross-section extruded sideways, so every row is
+    one colour. A median *filter* wide enough to erase the direction chevrons
+    ate a rail; this cannot, because a rail is a row."""
+    from spritegen import refclean
+
+    im = Image.new("RGB", (40, 12), (60, 60, 110))
+    for x in range(40):
+        im.putpixel((x, 3), (230, 230, 255))    # a rail: a whole row
+    for x in range(8, 12):
+        im.putpixel((x, 7), (120, 120, 170))    # a chevron: part of a row
+    out = refclean.row_flatten(im)
+    assert out.getpixel((0, 3)) == (230, 230, 255)
+    assert out.getpixel((39, 3)) == (230, 230, 255)
+    assert out.getpixel((9, 7)) == (60, 60, 110)
+
+
+def test_palette_reports_colours_that_are_really_there():
+    from spritegen import refclean
+
+    im = Image.new("RGB", (40, 40), (67, 67, 117))
+    for y in range(0, 8):
+        for x in range(40):
+            im.putpixel((x, y), (228, 233, 255))
+    hexes = refclean.palette(im, 2)
+    assert "#434375" in hexes
+    assert all(h.startswith("#") and len(h) == 7 for h in hexes)
+
+
+def test_the_measured_palette_reaches_the_prompt_body():
+    """Both paths build their prompt body from vision.field_block, so a palette
+    recorded on the object reaches the pack and the HTML alike."""
+    from spritegen import vision
+
+    obj = {"subject": "a thing", "palette": ["#434375", "#E4E9FF"]}
+    text = vision.field_block(obj, "front")
+    assert "PALETTE" in text and "#434375" in text
+    assert "PALETTE" not in vision.field_block({"subject": "a thing"}, "front")
+
+
+def test_flattened_rows_skip_the_flat_field():
+    """row_flatten has already removed every variation along the run, so the
+    only variation left is the cross-section — the design, not a lighting ramp.
+    Correcting it anyway tinted the top of a conveyor run green: per-channel
+    gain on a near-neutral dark row amplifies whichever channel leads."""
+    from spritegen import refclean
+
+    im = Image.new("RGB", (40, 12), (58, 62, 99))
+    for x in range(40):
+        im.putpixel((x, 5), (228, 233, 255))
+    out = refclean.clean(im, flatten_rows=True, min_long=40)
+    assert out.getpixel((20, 0)) == (58, 62, 99), "an untouched row must stay untouched"
+
+
+def test_row_flatten_never_invents_a_colour():
+    """Per-channel medians can name a colour that is nowhere in the row. A strip
+    padded far enough up to catch a blue HUD badge took its red and green from
+    the badge and its blue from the track, and the row came out green."""
+    from spritegen import refclean
+
+    im = Image.new("RGB", (10, 1))
+    im.putdata([(45, 150, 242)] * 4 + [(60, 60, 110)] * 6)   # badge, then track
+    out = refclean.row_flatten(im)
+    assert out.getpixel((5, 0)) in {(45, 150, 242), (60, 60, 110)}
+
+
+def test_a_framed_object_loses_the_wall_its_padding_dragged_in():
+    """Blanking ran one way only: a dispenser's crop lost the projectile inside
+    it while the projectile's crop kept half a dispenser. On a 26px object the
+    walls are most of what the model is shown, and it drew them."""
+    tmp = Path(tempfile.mkdtemp())
+    image = Image.new("RGB", (400, 400), (20, 20, 40))
+    for x in range(100, 300):                      # the housing's wall
+        for y in range(100, 300):
+            image.putpixel((x, y), (200, 200, 200))
+    for x in range(180, 220):                      # the object inside it
+        for y in range(180, 220):
+            image.putpixel((x, y), (255, 0, 0))
+    objects = [
+        {"id": "housing", "bbox": [100, 100, 300, 300], "views": ["front"]},
+        {"id": "pellet", "bbox": [180, 180, 220, 220], "views": ["front"]},
+    ]
+    kept, _ = extract.crop_objects(image, objects, tmp / "refs")
+    contents = extract.find_contents(kept)
+    extract.blank_contents(kept, contents, image)
+
+    pellet = Image.open(kept[1]["crop"]).convert("RGB")
+    try:
+        assert (255, 0, 0) in pellet.getdata(), "the object itself must survive"
+        assert (200, 200, 200) not in pellet.getdata(), "the wall must not"
+    finally:
+        pellet.close()
+
+
+def test_hand_written_blank_boxes_are_painted_out():
+    """The escape hatch for what is not itself a listed object: a value printed
+    on a body, a neighbour the padding caught. Whatever the model must not copy
+    has to leave the picture, because forbidding it in words loses."""
+    tmp = Path(tempfile.mkdtemp())
+    image = Image.new("RGB", (400, 400), (20, 20, 40))
+    for x in range(60, 160):
+        for y in range(60, 160):
+            image.putpixel((x, y), (30, 200, 90))
+    for x in range(90, 130):                       # a number printed on it
+        for y in range(90, 130):
+            image.putpixel((x, y), (255, 255, 255))
+    objects = [{"id": "piece", "bbox": [60, 60, 160, 160], "views": ["front"],
+                "blank": [[90, 90, 130, 130]]}]
+    kept, _ = extract.crop_objects(image, objects, tmp / "refs")
+    extract.blank_contents(kept, extract.find_contents(kept), image)
+
+    piece = Image.open(kept[0]["crop"]).convert("RGB")
+    try:
+        assert (255, 255, 255) not in piece.getdata()
+        assert (30, 200, 90) in piece.getdata()
+    finally:
+        piece.close()
+
+
+def test_a_blanked_box_is_filled_from_its_own_surroundings():
+    """One fill for the whole image cannot serve a number printed on a pink body
+    and a tile sitting on a dark board at once — and taking that one fill from
+    the image's border served neither: a phone screenshot's border is its
+    letterbox bars, so every blanked box came back a black slab."""
+    tmp = Path(tempfile.mkdtemp())
+    image = Image.new("RGB", (300, 300), (0, 0, 0))          # letterboxed source
+    for x in range(40, 260):
+        for y in range(40, 260):
+            image.putpixel((x, y), (30, 30, 60))             # the board
+    for x in range(100, 180):
+        for y in range(100, 180):
+            image.putpixel((x, y), (200, 60, 140))           # a pink body
+    for x in range(125, 155):
+        for y in range(125, 155):
+            image.putpixel((x, y), (255, 255, 255))          # a value printed on it
+
+    objects = [{"id": "piece", "bbox": [100, 100, 180, 180], "views": ["front"],
+                "blank": [[125, 125, 155, 155]]}]
+    kept, _ = extract.crop_objects(image, objects, tmp / "refs")
+    extract.blank_contents(kept, extract.find_contents(kept), image)
+
+    piece = Image.open(kept[0]["crop"]).convert("RGB")
+    try:
+        assert (255, 255, 255) not in piece.getdata(), "the value must go"
+        assert (0, 0, 0) not in piece.getdata(), "and must not be replaced by letterbox"
+        # Filled with the body it was printed on.
+        assert piece.getpixel((piece.width // 2, piece.height // 2)) == (200, 60, 140)
+    finally:
+        piece.close()

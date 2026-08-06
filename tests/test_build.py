@@ -1097,3 +1097,72 @@ def test_a_missing_asset_reference_fails_only_that_asset():
     assert records["btn_play"]["status"] == "failed"
     assert "reference" in records["btn_play"]["error"]
 
+
+
+def test_a_single_image_asset_still_gets_picture_1_guidance():
+    """The Picture 1 paragraph is what separates the object's identity from the
+    crop's screen-capture rendering. Gating the whole block on a style image
+    left single-image assets with none: sleepers a DO NOT DRAW bullet had been
+    holding off came straight back."""
+    from spritegen.config import Asset, Pack
+
+    pack = Pack(name="p", base_url="http://x/v1", key_env="", model="m",
+                style_prefix="styled", plate_prompt="plate", style_reference=None)
+    asset = Asset(id="loop", prompt="OBJECT a loop", reference=Path("crop.png"))
+    text = pack.full_prompt(asset)
+    assert "Picture 1" in text
+    assert "capture artefacts, not design" in text
+    assert "Picture 2" not in text, "no style image is sent, so none may be promised"
+
+
+def test_two_image_asset_names_both_pictures():
+    from spritegen.config import Asset, Pack
+
+    pack = Pack(name="p", base_url="http://x/v1", key_env="", model="m",
+                style_prefix="styled", plate_prompt="plate",
+                style_reference=Path("style.png"))
+    asset = Asset(id="loop", prompt="OBJECT a loop", reference=Path("crop.png"))
+    text = pack.full_prompt(asset)
+    assert "Picture 1" in text and "Picture 2" in text
+
+
+def test_an_asset_with_no_reference_names_no_pictures():
+    from spritegen.config import Asset, Pack
+
+    pack = Pack(name="p", base_url="http://x/v1", key_env="", model="m",
+                style_prefix="styled", plate_prompt="plate",
+                style_reference=Path("style.png"))
+    text = pack.full_prompt(Asset(id="loop", prompt="OBJECT a loop"))
+    assert "Picture 1" not in text and "Picture 2" not in text
+
+
+def test_a_derived_asset_needs_no_style_bible():
+    """It sends no request at all, so demanding a reference or a plate for it
+    turned a free rotation into "run `init` then `pick` first" on a pack that
+    never had a style plate."""
+    import tempfile
+    from pathlib import Path as _P
+    from PIL import Image as _I
+    from spritegen import cli
+
+    tmp = _P(tempfile.mkdtemp())
+    spec = tmp / "p.toml"
+    ref = tmp / "crop.png"
+    _I.new("RGBA", (40, 40), (200, 40, 160, 255)).save(ref)
+    spec.write_text(
+        '[api]\nkey_env = ""\n[pack]\nmodel = "m"\n[style]\nprefix = "s"\n'
+        f'[[assets]]\nid = "a-front"\nprompt = "q"\nreference = "crop.png"\n'
+        '[[assets]]\nid = "a-rotated_90"\nprompt = "q"\n'
+        'derive_from = "a-front"\nrotate = 90\n', encoding="utf-8")
+
+    out_root = tmp / "out"
+    (out_root / "p").mkdir(parents=True)
+    _I.new("RGBA", (40, 60), (200, 40, 160, 255)).save(out_root / "p" / "a-front.png")
+
+    code = cli.main(["build", str(spec), "--only", "a-rotated_90",
+                     "--out-root", str(out_root), "--jobs", "1"])
+    assert code == 0
+    turned = out_root / "p" / "a-rotated_90.png"
+    assert turned.exists()
+    with _I.open(turned) as im:
+        assert im.size[0] == im.size[1]     # trim_and_pad squares it

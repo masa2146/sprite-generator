@@ -138,14 +138,26 @@ def build_payload_images(
     structure_png: bytes | None = None,
     seed: int | None = None,
     style_png: bytes | None = None,
+    structure_mode: str = "",
+    control_strength: float | None = None,
 ) -> dict:
     """Payload for POST {base_url}/images. Optional fields are omitted
-    entirely (not sent as null) when absent — that's what the contract asks for."""
+    entirely (not sent as null) when absent — that's what the contract asks for.
+
+    structure_mode/control_strength are extensions the local backend reads and a
+    hosted endpoint ignores. Omitted unless the pack sets them, so the endpoint's
+    own default stands and the "copy" graph is never handed a control_strength
+    it rejects.
+    """
     body: dict = {"model": model, "prompt": prompt, "n": 1}
     if aspect_ratio is not None:
         body["aspect_ratio"] = aspect_ratio
     if seed is not None:
         body["seed"] = seed
+    if structure_mode:
+        body["structure_mode"] = structure_mode
+    if control_strength is not None:
+        body["control_strength"] = control_strength
     # Same order as build_payload, but the meaning now travels in `role`, not
     # in the position: object first, style second.
     refs = [reference_part(img, role)
@@ -278,6 +290,8 @@ def generate(
     structure_png: bytes | None = None,
     style_png: bytes | None = None,
     seed: int | None = None,
+    structure_mode: str = "",
+    control_strength: float | None = None,
     retries: int = 3,
     sleeper=time.sleep,
 ) -> tuple[bytes, float | None, dict]:
@@ -295,6 +309,7 @@ def generate(
         payload = build_payload_images(
             pack.model, prompt, aspect_ratio=aspect_ratio,
             structure_png=structure_png, seed=seed, style_png=style_png,
+            structure_mode=structure_mode, control_strength=control_strength,
         )
         parse = parse_image_images
     else:

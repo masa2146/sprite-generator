@@ -140,10 +140,17 @@ def test_missing_blocks_are_reported_per_field():
 # --- prompt assembly --------------------------------------------------------
 
 def test_style_prefix_joins_fields_in_the_fixed_order():
-    text = vision.style_prefix(SCHEMA)
+    text = vision.style_prefix(SCHEMA, camera=True)
     order = [text.index(SCHEMA["style"][f]) for f in
              ("render", "camera", "lighting", "linework", "realism", "palette")]
     assert order == sorted(order), text
+
+
+def test_style_prefix_drops_the_camera_by_default():
+    """A pack prefix goes out beside every asset's own VIEW line, so an angle
+    in it contradicts every view but the one it names."""
+    assert SCHEMA["style"]["camera"] not in vision.style_prefix(SCHEMA)
+    assert SCHEMA["style"]["render"] in vision.style_prefix(SCHEMA)
 
 
 def test_style_prefix_excludes_the_subject():
@@ -301,14 +308,36 @@ def test_analyze_with_user_text_appends_the_override_clause():
     assert "user" in sent.lower()
 
 
+def test_both_paths_ban_printed_values_from_the_description_fields():
+    """The generated prompt's DO NOT DRAW block bans text unconditionally, so a
+    numeral described in "detail" makes one prompt argue with itself — and the
+    specific clause wins, which is how a bunny came back with a 40 on it. The
+    manual path carries the same rule in its skill; drift between the two is
+    what config.FIXED_BANS living in one place is meant to prevent."""
+    skill = (Path(__file__).resolve().parents[1]
+             / ".claude" / "skills" / "sprite-brief" / "SKILL.md").read_text(encoding="utf-8")
+    for text in (vision.OBJECT_ANALYSIS_PROMPT, skill):
+        assert "variable" in text.lower()
+        assert '"detail"' in text or "`detail`" in text
+    assert "numbers, letters and labels" in vision.OBJECT_ANALYSIS_PROMPT.lower()
+
+
 # --- view pool --------------------------------------------------------------
 
 def test_view_pool_contents():
     assert set(vision.VIEW_POOL) == {
-        "front", "three_quarter", "side", "back", "top_down"}
+        "front", "three_quarter", "side", "back", "top_down",
+        "rotated_45", "rotated_90", "rotated_135"}
     assert vision.DEFAULT_VIEW == "front"
     for phrase in vision.VIEW_POOL.values():
         assert phrase and not phrase.endswith(".")
+
+
+def test_the_analysis_prompt_offers_every_view_in_the_pool():
+    """A pool name the vision model is never told about is unreachable, and a
+    name in the prompt but not the pool is silently dropped by normalise_views."""
+    for name in vision.VIEW_POOL:
+        assert name in vision.OBJECT_ANALYSIS_PROMPT, name
 
 
 def test_normalise_views_drops_names_outside_the_pool():
@@ -434,7 +463,7 @@ def test_style_prefix_skips_a_non_string_field_instead_of_crashing():
     prefix = vision.style_prefix(schema)
     assert "#2E2A4D" not in prefix
     for field in vision.STYLE_FIELDS:
-        if field != "palette":
+        if field not in ("palette", "camera"):  # camera never enters a pack prefix
             assert SCHEMA["style"][field] in prefix
 
 

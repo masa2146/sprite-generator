@@ -588,3 +588,38 @@ def test_post_with_retry_returns_the_parsed_body_and_retries_5xx():
     assert len(rec.calls) == 2
     assert slept == [2]
 
+
+
+def test_structure_mode_and_strength_are_omitted_unless_the_pack_sets_them():
+    """Both are local-backend extensions. Sending a default would override the
+    endpoint's own, and the "copy" graph rejects control_strength outright."""
+    from spritegen import orclient
+
+    bare = orclient.build_payload_images("m", "p")
+    assert "structure_mode" not in bare and "control_strength" not in bare
+
+    body = orclient.build_payload_images("m", "p", structure_mode="copy")
+    assert body["structure_mode"] == "copy"
+    assert "control_strength" not in body
+
+    body = orclient.build_payload_images("m", "p", structure_mode="edges",
+                                         control_strength=1.1)
+    assert body["control_strength"] == 1.1
+
+
+def test_a_pack_carries_structure_mode_through_to_the_wire():
+    import tempfile
+    from pathlib import Path
+    from spritegen import config
+
+    spec = Path(tempfile.mkdtemp()) / "p.toml"
+    spec.write_text(
+        '[api]\nkey_env = ""\n[pack]\nmodel = "m"\n[style]\nprefix = "s"\n'
+        '[[assets]]\nid = "a"\nprompt = "q"\nstructure_mode = "copy"\n'
+        '[[assets]]\nid = "b"\nprompt = "q"\ncontrol_strength = 1.2\n',
+        encoding="utf-8")
+    by_id = {a.id: a for a in config.load_pack(spec).assets}
+    assert by_id["a"].structure_mode == "copy"
+    assert by_id["a"].control_strength is None
+    assert by_id["b"].structure_mode == ""
+    assert by_id["b"].control_strength == 1.2

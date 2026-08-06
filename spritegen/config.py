@@ -53,17 +53,35 @@ BG_CLAUSE = ("isolated on flat solid #808080 neutral grey background, no shadow,
 # "Picture 1: <image>Picture 2: <image>" to the prompt before tokenising, so
 # "image1" refers to a label that never reaches the model and cannot bind to
 # anything. The socket is called image1; what the model reads is Picture 1.
-REFERENCES_BLOCK = (
+_PICTURE_1 = (
     "REFERENCES\n"
     "- Picture 1 — the object to redraw. Take its IDENTITY from this and nothing\n"
     "  else: silhouette, proportions, colours, markings, features.\n"
     "  Do NOT take its rendering. Picture 1 is a small low-resolution screen\n"
     "  capture; its pixellation, blocky stair-stepped edges and colour banding\n"
     "  are capture artefacts, not design. Redraw the object cleanly at full\n"
-    "  resolution in the ART STYLE below.\n"
-    "- Picture 2 — the reference screenshot. Use it ONLY for art style, palette\n"
+    "  resolution in the ART STYLE below."
+)
+_PICTURE_2 = (
+    "\n- Picture 2 — the reference screenshot. Use it ONLY for art style, palette\n"
     "  and lighting. Do not copy any object from it."
 )
+
+
+def references_block(style_image: bool = True) -> str:
+    """The REFERENCES block, naming only the pictures actually being sent.
+
+    Picture 1's paragraph is the part that separates identity from rendering,
+    and it applies to any asset that sends a crop at all. Emitting the whole
+    block only when a style image went too left single-image assets with no
+    guidance whatsoever: dropping the style reference from a pack brought back
+    the sleepers a DO NOT DRAW bullet had been holding off and left the model
+    rendering the crop's own screen-capture look.
+    """
+    return _PICTURE_1 + (_PICTURE_2 if style_image else "")
+
+
+REFERENCES_BLOCK = references_block()
 
 def output_block(subject: str = "copy of the object described above",
                   square: bool = False) -> str:
@@ -94,10 +112,35 @@ def output_block(subject: str = "copy of the object described above",
     )
 
 
+TILE_OUTPUT = (
+    "OUTPUT\n"
+    "- The picture IS the piece. It fills the frame edge to edge: no margin, no\n"
+    "  backdrop, nothing isolated in the middle of anything.\n"
+    "- Whatever meets one edge continues in from the opposite edge, so copies\n"
+    "  laid side by side show no seam."
+)
+
+
+# Every one of these was a measured failure, and the ban on text is why none of
+# them is speculative: that clause lives here, rides on every prompt from both
+# paths, and held on five straight assets in a live run where a "keep it flat"
+# left to each pack's own style line held on none. A rule that matters cannot
+# depend on what a human happened to type into `style`.
 FIXED_BANS = (
     "- any text, numbers, labels or logos\n"
     "- any other object from the reference image\n"
-    "- more than one copy of the object"
+    "- more than one copy of the object\n"
+    # Worded against the VIEW line rather than against angles in general: an
+    # outright ban on turning the object would contradict the three_quarter and
+    # top_down views the same prompt can ask for, which is the exact shape of
+    # bug this block keeps catching.
+    "- any perspective, tilt or isometric projection the VIEW line above did\n"
+    "  not ask for; the object sits flat and square to the viewer otherwise\n"
+    "- any colour that is neither in the reference nor named above; do not\n"
+    "  recolour parts, do not introduce a second hue, do not brighten the\n"
+    "  palette\n"
+    "- any panel, stud, bolt, rivet, seam, light, glint or marking that the\n"
+    "  description above does not ask for"
 )
 
 
@@ -130,6 +173,28 @@ class Asset:
     # (a tray's crop necessarily shows what sits in the tray). Data, not prose,
     # so it can be hand-edited in the pack; full_prompt files it under DO NOT DRAW.
     exclude: str = ""
+    # How the backend should use the reference. "" leaves the choice to the
+    # endpoint's default. The local backend takes "edges" (trace the silhouette,
+    # prompt owns colour and finish) or "copy" (clone the reference's render).
+    # Which one is right is a property of the object: a shape the prompt can
+    # describe wants edges, a surface treatment the prompt cannot wants copy —
+    # a conveyor track traced by edges came back as a picture frame, because
+    # everything that made it read as a track lived in its material.
+    structure_mode: str = ""
+    # How hard "edges" holds the silhouette. None leaves the endpoint's default;
+    # the "copy" graph has no such dial and rejects the field.
+    control_strength: float | None = None
+    # Another asset in this pack whose finished image this one is turned from,
+    # and by how many degrees. No request is sent for such an asset at all: a
+    # plane rotation is arithmetic, and asking for one produced three upright
+    # frames that merely differed in finish.
+    derive_from: str = ""
+    rotate: float = 0.0
+    # Another asset in this pack whose finished image sets this one's colours.
+    # Pieces of one object generated in separate requests drift apart, and the
+    # piece that came out right is a better source for the palette than any
+    # wording. Empty for the master itself and for anything standalone.
+    palette_master: str = ""
 
 
 @dataclass
@@ -182,21 +247,29 @@ class Pack:
         structured field, the chat transport appends it to the prompt text."""
         prefix = self.style_prefix.strip()
         body = asset.prompt.strip()
-        if not asset.cutout:
-            # This asset IS the whole image (a background, a seamless tile) —
-            # there is nothing to isolate, so no backdrop clause, no cutout
-            # later, and none of the single-subject blocks below.
-            return f"{prefix} {body}".strip()
 
         blocks = []
-        # Only when two images actually go on the wire — build_one sends the
-        # style image beside an asset's own reference, never instead of one.
-        if asset.reference is not None and self.style_reference is not None:
-            blocks.append(REFERENCES_BLOCK)
+        # Keyed on what build_one actually puts on the wire: an asset's own crop
+        # is Picture 1, and the pack's style reference rides along as Picture 2
+        # only when there is one. Naming a picture that is not sent is the same
+        # failure in reverse.
+        if asset.reference is not None:
+            # build_one withholds the style image from a full-bleed asset, so
+            # naming Picture 2 for one would promise a picture that never goes.
+            blocks.append(references_block(
+                asset.cutout and self.style_reference is not None))
         blocks.append(body)
         if prefix:
             blocks.append(f"ART STYLE  {prefix}")
-        blocks += [output_block(), do_not_draw(asset.exclude)]
+        # A cutout=false asset IS the whole image (a background, a seamless
+        # tile, one run of track), so it gets the opposite OUTPUT block: fill
+        # the frame instead of sitting isolated in the middle of it. It still
+        # gets REFERENCES and DO NOT DRAW — dropping the whole prompt down to
+        # "prefix body" cost a tileable piece its continuity bans, and asking
+        # for a #808080 backdrop it must not have cost it the sprite, because
+        # nothing came back for the cut to keep.
+        blocks.append(output_block() if asset.cutout else TILE_OUTPUT)
+        blocks.append(do_not_draw(asset.exclude))
         return "\n\n".join(blocks)
 
     def plate_full_prompt(self) -> str:
@@ -323,6 +396,11 @@ def load_pack(
                 cutout=row.get("cutout", True),
                 reference=_resolve_ref(row.get("reference"), spec_path, f"assets[{i}]"),
                 exclude=row.get("exclude", ""),
+                structure_mode=row.get("structure_mode", ""),
+                control_strength=row.get("control_strength"),
+                derive_from=row.get("derive_from", ""),
+                rotate=float(row.get("rotate", 0) or 0),
+                palette_master=row.get("palette_master", ""),
             )
         )
     if not assets:

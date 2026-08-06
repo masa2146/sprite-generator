@@ -35,6 +35,7 @@ from . import extract
 from . import orclient
 from . import packwriter
 from . import post
+from . import refclean
 from . import vision
 
 PROG = "spritegen"       # console script; `python3 -m spritegen` is the same CLI
@@ -72,7 +73,52 @@ def _record(pack, asset, status, cost=None, file=None, error=None):
     }
 
 
-def build_one(pack, asset, bible_png):
+def _matched(img, pack, asset):
+    """This asset's image pulled onto its palette master, if it names one.
+
+    A missing master is a note, not a failure: the image is already paid for
+    and perfectly usable unmatched, and the master is simply another asset in
+    the same pack that may not have been built yet.
+    """
+    if not asset.palette_master:
+        return img
+    master = pack.out_dir / f"{asset.palette_master}.png"
+    if not master.exists():
+        print(f"note: {asset.id}: palette master {master} not found — colours "
+              f"left as generated", file=sys.stderr)
+        return img
+    with Image.open(master) as ref:
+        return post.match_palette(img, ref)
+
+
+def derive_one(pack, asset):
+    """Turn a finished sibling into this asset instead of generating it.
+
+    A plane rotation is arithmetic. Asking the backend for one produced three
+    upright frames that differed only in finish, and even a backend that obeyed
+    would be redrawing the object three times and getting three slightly
+    different objects. Rotating the source guarantees they are the same sprite.
+    """
+    source = pack.out_dir / f"{asset.derive_from}.png"
+    if not source.exists():
+        return _record(pack, asset, "failed",
+                       error=f"derive_from {asset.derive_from} has not been built yet "
+                             f"({source} missing)")
+    try:
+        with Image.open(source) as opened:
+            img = opened.convert("RGBA")
+        # expand so a 45 degree turn keeps its corners; bicubic because the
+        # source is already a clean sprite, not a screen capture.
+        turned = post.trim_and_pad(
+            img.rotate(-asset.rotate, resample=Image.BICUBIC, expand=True))
+        target = pack.out_dir / f"{asset.id}.png"
+        turned.save(target)
+    except Exception as exc:
+        return _record(pack, asset, "failed", error=f"{type(exc).__name__}: {exc}")
+    return _record(pack, asset, "ok", cost=0.0, file=str(target))
+
+
+def build_one(pack, asset, bible_png, seed_offset: int = 0):
     """Generate and post-process one asset. Returns a manifest record, never raises.
 
     Two named slots, because the two images do different jobs and the backend
@@ -84,6 +130,9 @@ def build_one(pack, asset, bible_png):
     A style image is never sent as a structure: a backend with no style-
     conditioning input transforms it instead, and returns a copy of it.
     """
+    if asset.derive_from:
+        return derive_one(pack, asset)
+
     out_dir = pack.out_dir
     structure_png = None
     # A cutout=false asset (background, seamless tile) is the whole image:
@@ -130,7 +179,14 @@ def build_one(pack, asset, bible_png):
             aspect_ratio=asset.aspect_ratio,
             structure_png=structure_png,
             style_png=style_png,
-            seed=pack.seed_for(asset.id),
+            # Deterministic per asset, so a rebuild after a prompt edit changes
+            # only what the edit changed. seed_offset is the one way to move it:
+            # without it a prompt that is already right but unlucky has no
+            # second roll, and editing the prompt to force one changes two
+            # things at once.
+            seed=(pack.seed_for(asset.id) + seed_offset) % (2 ** 31),
+            structure_mode=asset.structure_mode,
+            control_strength=asset.control_strength,
         )
     except orclient.ImageMissing as exc:
         try:
@@ -150,8 +206,13 @@ def build_one(pack, asset, bible_png):
         target = out_dir / f"{asset.id}.png"
         if asset.cutout:
             img = post.cut_background(png)
-            img = post.trim_and_pad(img)
+            img = _matched(post.trim_and_pad(img), pack, asset)
             img.save(target)
+        elif asset.palette_master:
+            # Decoded only to be recoloured — see below for why the plain
+            # full-bleed case still ships its bytes untouched.
+            _matched(Image.open(io.BytesIO(png)).convert("RGBA"),
+                     pack, asset).save(target)
         else:
             # This asset IS the whole image (background/seamless tile) — there
             # is no subject to cut out or trim, ship the bytes unmodified.
@@ -253,7 +314,10 @@ def cmd_build(args):
     if _missing_key(pack):
         return 1
 
-    needs_bible = any(a.reference is None for a in targets)
+    # A derived asset sends no request at all, so it needs no reference and no
+    # bible — demanding one turned a free rotation into "run `init` then `pick`
+    # first" on a pack that never had a style plate.
+    needs_bible = any(a.reference is None and not a.derive_from for a in targets)
     if needs_bible and not pack.style_bible.exists():
         print(f"error: {pack.style_bible} not found — run `init` then `pick` first",
               file=sys.stderr)
@@ -268,12 +332,18 @@ def cmd_build(args):
     warned_no_cost = False
     stopped_early = False
 
-    for chunk in _chunks(targets, WORKERS):
+    # WORKERS suits a hosted endpoint, which absorbs four calls at once. A local
+    # GPU serving one job at a time does not, so the count is a flag: --jobs 1
+    # makes the batch strictly sequential.
+    jobs = max(1, getattr(args, "jobs", None) or WORKERS)
+    for chunk in _chunks(targets, jobs):
         if cost_seen and spent >= args.max_cost:
             stopped_early = True
             break
-        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-            futures = [(a, pool.submit(build_one, pack, a, bible_png)) for a in chunk]
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            futures = [(a, pool.submit(build_one, pack, a, bible_png,
+                                       getattr(args, "seed_offset", 0) or 0))
+                       for a in chunk]
             # build_one's contract is "never raises," but this is defence in depth:
             # if it somehow does, that asset degrades to a failed record instead of
             # taking down the whole batch.
@@ -756,6 +826,57 @@ def cmd_export(args):
     return 0
 
 
+def cmd_check(args):
+    """Report whether the configured image endpoint will answer right now.
+
+    Exists so a caller deciding *whether to offer* generation does not have to
+    hardcode a URL or parse a build failure: base_url comes from the same
+    resolution build uses, and the exit code is the answer. 0 reachable,
+    1 not — a local GPU service is up or down several times a session.
+    """
+    try:
+        pack = config.env_pack(base_url=args.base_url, model="probe")
+    except config.SpecError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    url = pack.base_url.rstrip("/") + "/models"
+    print(f"endpoint  {pack.base_url}")
+    try:
+        resp = orclient.requests.get(url, headers=orclient.build_headers(pack), timeout=5)
+    except Exception as exc:
+        print(f"status    unreachable ({type(exc).__name__})")
+        return 1
+    if resp.status_code != 200:
+        print(f"status    HTTP {resp.status_code}")
+        return 1
+    try:
+        ids = [m.get("id") for m in (resp.json().get("data") or []) if isinstance(m, dict)]
+    except ValueError:
+        ids = []
+    if ids:
+        print("models    " + ", ".join(str(i) for i in ids if i))
+
+    # Answering /models is not the same as being able to generate: the local
+    # service stayed up and kept listing models while the GPU backend behind it
+    # had crashed, and every build came back 502. /health is that service's own
+    # extension — absent on a hosted endpoint, where listing models is as much
+    # as can be asked.
+    root = pack.base_url.rstrip("/")
+    root = root[: -len("/v1")] if root.endswith("/v1") else root
+    try:
+        health = orclient.requests.get(root + "/health", timeout=5).json()
+    except Exception:
+        print("status    up")
+        return 0
+    backend = health.get("comfyui") if isinstance(health, dict) else None
+    if backend and backend != "up":
+        print(f"status    endpoint up, generation backend {backend}")
+        return 1
+    print("status    up")
+    return 0
+
+
 def cmd_extract(args):
     pack_path = Path(args.pack)
     if pack_path.exists():
@@ -834,6 +955,14 @@ def cmd_extract(args):
         print("error: no usable objects — nothing written", file=sys.stderr)
         return 1
 
+    # Before the sheet: the sheet's job is to show what will actually be sent,
+    # and a framing object's crop is not that until its contents are blanked.
+    contents = extract.find_contents(kept)
+    extract.blank_contents(kept, contents, image)
+    # After blanking, which maps source-image boxes into crop coordinates that
+    # the upscale here would invalidate.
+    refclean.clean_crops(kept)
+
     sheet = None
     try:
         sheet = extract.labelled_sheet(kept, refs_dir / "_contact_sheet.png")
@@ -861,13 +990,10 @@ def cmd_extract(args):
         print(f"error: cannot write {pack_path}: {exc}", file=sys.stderr)
         return 1
 
-    contents = extract.find_contents(kept)
     for obj_id, inside in contents.items():
-        # The crop for a framing object shows what it frames. Say so: the user
-        # decides whether to keep the reference or let the prompt carry it.
         print(f"note: {obj_id}'s box also contains {len(inside)} other object(s) "
-              f"({', '.join(inside)}) — its crop shows them too, and its prompt "
-              f"now asks for it without them", file=sys.stderr)
+              f"({', '.join(inside)}) — they are blanked out of its crop, and its "
+              f"prompt now asks for it without them", file=sys.stderr)
 
     html_path = _write_export(pack_path, Path(args.out_root))
 
@@ -921,6 +1047,12 @@ def main(argv=None):
                        help="print prompts and estimated cost, make no requests")
     build.add_argument("--max-cost", type=float, default=DEFAULT_MAX_COST,
                        help=f"USD ceiling (default {DEFAULT_MAX_COST})")
+    build.add_argument("--seed-offset", type=int, default=0,
+                       help="shift every asset's seed; a different value rerolls "
+                            "the same prompt instead of rewriting it")
+    build.add_argument("--jobs", type=int, default=WORKERS,
+                       help=f"assets in flight at once (default {WORKERS}); "
+                            "use 1 against a local GPU that serves one at a time")
     build.set_defaults(func=cmd_build)
 
     init = subs.add_parser("init", help="generate style plate candidates")
@@ -994,6 +1126,11 @@ def main(argv=None):
                           help="comma-separated asset ids, as in build")
     _add_endpoint_flags(export_p)
     export_p.set_defaults(func=cmd_export)
+
+    check_p = subs.add_parser(
+        "check", help="report whether the image endpoint is reachable right now")
+    check_p.add_argument("--base-url", default=None, help="override the endpoint")
+    check_p.set_defaults(func=cmd_check)
 
     # Listed so `--help` shows them; PASSTHROUGH above is what actually runs them.
     subs.add_parser("brief", add_help=False,
