@@ -138,7 +138,7 @@ def flat(rgb):
 
 
 # ------------------------------------------------------------ renderer
-def render(sdf, size=(256, 256), tilt=15, color=flat((240, 160, 20)),
+def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
            light=None, ambient=0.42, diffuse=0.62, spec=0.5, shininess=40,
            rim=0.10, ao=0.55, frame=1.15, bg_alpha=0,
            spec_color=(255, 255, 255), rim_color=(255, 255, 255)):
@@ -155,11 +155,17 @@ def render(sdf, size=(256, 256), tilt=15, color=flat((240, 160, 20)),
     ln = math.sqrt(lx*lx + ly*ly + lz*lz)
     L = np.array([lx/ln, ly/ln, lz/ln])
 
-    # camera basis: orthographic, pitched around X by tilt
+    # camera basis: orthographic, pitched around X by tilt, then turned
+    # around Y by yaw (turntable - the way character turnarounds are shot)
     a = math.radians(tilt)
     fwd = np.array([0.0, -math.sin(a), -math.cos(a)])
     up = np.array([0.0, math.cos(a), -math.sin(a)])
     right = np.array([1.0, 0.0, 0.0])
+    if yaw:
+        b = math.radians(yaw)
+        cb, sb = math.cos(b), math.sin(b)
+        roty = np.array([[cb, 0, sb], [0, 1, 0], [-sb, 0, cb]])
+        fwd, up, right = roty @ fwd, roty @ up, roty @ right
 
     xs = np.linspace(-frame, frame, w)
     ys = np.linspace(frame*H/W, -frame*H/W, h)
@@ -223,3 +229,47 @@ def render(sdf, size=(256, 256), tilt=15, color=flat((240, 160, 20)),
         bgimg.alpha_composite(out)
         return bgimg
     return out
+
+
+# ------------------------------------------ object-space materials (v4)
+def part_color(parts):
+    """Color by nearest part: parts = [(sdf_fn, rgb_or_color_fn), ...].
+    At each surface point the part whose SDF is closest to zero wins. Use it
+    to give sub-shapes their own material (pink inner ear on a white ear)
+    WITHOUT touching geometry - the parts just need to sit on the surface."""
+    def color(p, n):
+        ds = np.stack([np.abs(f(p)) for f, _ in parts], axis=-1)
+        idx = ds.argmin(axis=-1)
+        out = np.zeros(p.shape[:-1] + (3,))
+        for i, (_, c) in enumerate(parts):
+            m = idx == i
+            if not m.any():
+                continue
+            out[m] = c(p[m], n[m]) if callable(c) else np.array(c, float)
+        return out
+    return color
+
+
+def spots(base, decals, center=(0, 0, 0)):
+    """Face features as OBJECT-SPACE decals: they live on the surface and
+    rotate/occlude correctly with camera yaw - never place features in
+    screen space, that is exactly what breaks 3/4 and side views.
+
+    decals = [(direction(3,), radius_deg, soft_deg, rgb), ...] where
+    direction points from `center` to the feature (e.g. +z face, eyes at
+    (+-0.28, 0.05, 1)). Later decals paint over earlier ones (glints last).
+    """
+    C = np.array(center, float)
+    dd = [(np.array(d, float) / np.linalg.norm(d), r, s, np.array(c, float))
+          for d, r, s, c in decals]
+    def color(p, n):
+        c = base(p, n) if callable(c := base) else np.broadcast_to(
+            np.array(base, float), p.shape[:-1] + (3,)).copy()
+        v = p - C
+        v = v / (np.linalg.norm(v, axis=-1, keepdims=True) + 1e-9)
+        for dv, rad, soft, rgb in dd:
+            ang = np.degrees(np.arccos(np.clip(v @ dv, -1, 1)))
+            w = np.clip((rad - ang) / max(soft, 1e-3), 0, 1)[..., None]
+            c = c * (1 - w) + rgb * w
+        return c
+    return color

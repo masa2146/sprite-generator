@@ -77,6 +77,31 @@ a recessed coin face is `subtract(coin, thin_cylinder)` — so iterate with
 the same side-by-side compare loop as everything else. Typical render cost
 is a few seconds per asset; keep `OVERSAMPLE=3`.
 
+## Characters: a routing ladder, not one technique
+
+Characters are where procedural drawing has a real boundary — route by case,
+in this order:
+
+1. **Turnaround references already exist** (AI-generated or hand-drawn view
+   sets): those ARE the masters. Don't redraw them — normalize (alpha, size,
+   fill ratio) and derive recolors/variants in code.
+2. **Blob-class character** (rounded body + simple appendages + flat kawaii
+   face): the SDF lane handles it. Build the body with `smooth_union` of
+   spheres/capsules, render each view with the `yaw` parameter (turntable —
+   consistency across views is by construction). Two hard rules: facial
+   features and inner-ear type markings go on as OBJECT-SPACE decals
+   (`spots()` — they rotate and occlude with the head; screen-space stickers
+   are exactly what breaks 3/4 and side views), and sub-part materials come
+   from `part_color()`, not from geometry hacks.
+3. **Full characters, animation, many poses**: leave 2D code. Best practice
+   is a 3D master — generate a mesh from the front view with an image-to-3D
+   model (e.g. Microsoft TRELLIS, open source) or model it once in Blender,
+   then script the turnaround with headless bpy (camera yaw loop, toon
+   shading, N direction renders). Deterministic view consistency is the
+   whole point; recommend this lane honestly instead of stretching lane 2.
+4. **Painterly/complex rendering**: diffusion generates the master; code
+   still does variants, rotations, normalization.
+
 ## Light in 2D: build volume, don't stick stickers
 
 A single global light direction per asset set, declared once as a constant.
