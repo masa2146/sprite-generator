@@ -722,7 +722,9 @@ def _run(tmp, data=None, out_name="b", extra=None):
     scene = _scene(tmp)
     analysis = _write(tmp, data if data is not None else _analysis())
     out_dir = Path(tmp) / out_name
-    argv = ["--analysis", str(analysis), "--out-dir", str(out_dir)]
+    # --no-open: without it, main() reaches webbrowser.open and a full-suite
+    # run opens a window per test that writes a contact sheet.
+    argv = ["--analysis", str(analysis), "--out-dir", str(out_dir), "--no-open"]
     return brief.main(argv + (extra or [])), out_dir, scene
 
 
@@ -820,7 +822,8 @@ def test_rerunning_from_the_briefs_own_analysis_is_allowed():
         data = json.loads(inner.read_text())
         data["objects"][0]["subject"] = "a SECOND PASS rabbit"
         inner.write_text(json.dumps(data), encoding="utf-8")
-        code2 = brief.main(["--analysis", str(inner), "--out-dir", str(out_dir)])
+        code2 = brief.main(["--analysis", str(inner), "--out-dir", str(out_dir),
+                           "--no-open"])
         assert code2 == 0
         assert "a SECOND PASS rabbit" in (out_dir / "review.html").read_text()
 
@@ -843,7 +846,8 @@ def test_the_review_copy_stamps_per_object_source_too():
         analysis_path.write_text(json.dumps(data), encoding="utf-8")
         out_dir = d / "b"
 
-        code = brief.main(["--analysis", str(analysis_path), "--out-dir", str(out_dir)])
+        code = brief.main(["--analysis", str(analysis_path), "--out-dir", str(out_dir),
+                          "--no-open"])
         assert code == 0
 
         inner = out_dir / "analysis.json"
@@ -903,7 +907,7 @@ def test_an_unreadable_image_exits_one():
         bad.write_text("not an image", encoding="utf-8")
         analysis = _write(tmp, _analysis())
         code = brief.main(["--analysis", str(analysis),
-                           "--out-dir", str(Path(tmp) / "b")])
+                           "--out-dir", str(Path(tmp) / "b"), "--no-open"])
     assert code == 1
 
 
@@ -919,7 +923,8 @@ def test_main_writes_review_html_end_to_end_with_no_style_image():
     analysis_path.write_text(json.dumps(data), encoding="utf-8")
     out_dir = d / "b"
 
-    code = brief.main(["--analysis", str(analysis_path), "--out-dir", str(out_dir)])
+    code = brief.main(["--analysis", str(analysis_path), "--out-dir", str(out_dir),
+                       "--no-open"])
     assert code == 0
     body = (out_dir / "review.html").read_text()
     assert "Picture 2" not in body
