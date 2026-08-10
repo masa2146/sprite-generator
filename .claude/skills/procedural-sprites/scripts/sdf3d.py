@@ -409,9 +409,28 @@ def interior_edges(depth, normal, depth_eps=0.02, normal_eps=0.25):
     crosses another. Both buffers are needed - two parts at the same depth
     still differ in normal, and a smooth fold differs in depth but not much
     in normal.
+
+    depth_eps/normal_eps are thresholds on a PER-PIXEL neighbour difference,
+    so what they mean depends on how many pixels the object spans - they are
+    not resolution-independent. At a small render (the 32x32 this module's
+    own tests use) ordinary curvature already changes the normal by more
+    than the default normal_eps between adjacent pixels almost everywhere: a
+    single lone sphere comes back with ~90% of its own silhouette marked as
+    "edge", which is curvature, not a crossing. At a few-hundred-to-1024px
+    render the same surface changes far less between neighbours and the
+    defaults settle down to marking genuine creases and crossings. A caller
+    who takes the defaults at an unusual size and gets a mask filled
+    edge-to-edge needs to loosen depth_eps/normal_eps for that size, not
+    assume the function is broken.
     """
-    d = np.where(np.isinf(depth), np.nanmax(depth[~np.isinf(depth)]) + 1.0,
-                 depth)
+    finite = ~np.isinf(depth)
+    if not finite.any():
+        # Every ray missed - a legitimate input (an empty crop, a part that
+        # rendered off-frame), not a caller error. There is nothing to find
+        # a jump between, so the answer is an empty mask, not a crash from
+        # np.nanmax reducing over zero elements.
+        return Image.fromarray(np.zeros(depth.shape, np.uint8), "L")
+    d = np.where(finite, depth, depth[finite].max() + 1.0)
     edge = np.zeros(d.shape, bool)
     for axis in (0, 1):
         dd = np.abs(np.diff(d, axis=axis, prepend=d.take([0], axis=axis)))
@@ -419,8 +438,7 @@ def interior_edges(depth, normal, depth_eps=0.02, normal_eps=0.25):
             np.diff(normal, axis=axis,
                     prepend=normal.take([0], axis=axis)), axis=-1)
         edge |= (dd > depth_eps) | (nn > normal_eps)
-    inside = ~np.isinf(depth)
-    return Image.fromarray((edge & inside).astype(np.uint8) * 255, "L")
+    return Image.fromarray((edge & finite).astype(np.uint8) * 255, "L")
 
 
 # ------------------------------------------ object-space materials (v4)

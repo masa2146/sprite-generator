@@ -259,20 +259,65 @@ def test_buffers_come_back_at_the_final_size():
     assert np.isinf(depth[0, 0])           # a corner ray misses
 
 
+def test_interior_edges_handles_an_all_miss_buffer():
+    """A crop with nothing in it (every ray misses) is a legitimate input -
+    an empty part, a box that rendered off-frame - not a caller error. It
+    must come back as an empty mask, not crash np.nanmax reducing over zero
+    elements."""
+    depth = np.full((8, 8), np.inf)
+    normal = np.zeros((8, 8, 3))
+    edges = np.asarray(interior_edges(depth, normal))
+    assert edges.shape == (8, 8)
+    assert edges.max() == 0
+
+
+def _dilate4(mask):
+    """4-neighbour dilation - the ring one pixel around `mask`, itself
+    excluded. Plain numpy, no scipy: this project's only dependencies are
+    pillow and numpy."""
+    d = np.zeros_like(mask)
+    d[1:, :] |= mask[:-1, :]
+    d[:-1, :] |= mask[1:, :]
+    d[:, 1:] |= mask[:, :-1]
+    d[:, :-1] |= mask[:, 1:]
+    return d
+
+
 def test_an_interior_edge_appears_where_two_parts_cross():
     """The alpha contour can only draw the outside. Where an arm crosses a
     body — or a horn crosses a skull — the line has to come from the depth
     and normal buffers, which the renderer already computes and used to
-    throw away."""
-    front = sphere(0.34, (-0.12, 0.0, 0.45))
-    back = sphere(0.46, (0.14, 0.0, -0.2))
-    _, depth, normal = _small(union(front, back),
-                              color=flat((200, 200, 200)), buffers=True)
-    edges = np.asarray(interior_edges(depth, normal))
-    assert edges.max() == 255
-    # the line is inside the silhouette, not on its rim
-    inner = edges[6:26, 6:26]
-    assert inner.max() == 255, inner.max()
+    throw away.
+
+    A bare `edges.max() == 255` does not prove this: a lone curved sphere at
+    this render size already marks most of its own silhouette as "edge" -
+    ordinary curvature crosses normal_eps almost everywhere at 32x32 (see
+    interior_edges's docstring) - so that assertion passed even with only
+    one part. This compares against a control instead. `front` is a small
+    sphere placed entirely inside the silhouette of the much larger `back`
+    sphere, so `ring` - the pixels touching front's own silhouette from
+    just outside it - is unambiguously the seam: it is exactly where back
+    is revealed from behind front, nowhere else. `edges_f`, the control,
+    covers only front's own footprint (it has no data outside it, by
+    construction), so it can never mark anything in `ring` - which is what
+    makes `diff & ring` a clean read on the crossing alone, not on back's
+    own curvature elsewhere in the frame.
+    """
+    front = sphere(0.2, (0.0, 0.0, 0.6))
+    back = sphere(0.65, (0.0, 0.0, -0.3))
+
+    img_f, depth_f, normal_f = _small(front, color=flat((200, 200, 200)),
+                                      buffers=True)
+    alpha_f = np.asarray(img_f)[..., 3] > 0
+    edges_f = np.asarray(interior_edges(depth_f, normal_f)) == 255  # control
+    ring = _dilate4(alpha_f) & ~alpha_f
+
+    _, depth_u, normal_u = _small(union(front, back),
+                                  color=flat((200, 200, 200)), buffers=True)
+    edges_u = np.asarray(interior_edges(depth_u, normal_u)) == 255
+
+    diff = edges_u & ~edges_f
+    assert (diff & ring).any(), "no edge in the ring where back is revealed"
 
 
 def test_a_banded_render_has_flat_steps():
