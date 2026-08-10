@@ -111,16 +111,29 @@ def load_analysis(path) -> Analysis:
         where = f"objects[{index}] ({obj_id})"
 
         entry = dict(obj)
-        entry["source"] = _resolve(obj.get("source"), base, where) or style_image
+        own_source = _resolve(obj.get("source"), base, where)
 
         bbox = obj.get("bbox")
         if bbox is not None:
             if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
                 raise BriefError(f"{where}: 'bbox' must be [x1, y1, x2, y2]")
-            if entry["source"] is None:
-                raise BriefError(f"{where}: 'bbox' needs an image to cut out of — "
-                                 "give the object a 'source' or the analysis a "
-                                 "'style_image'")
+
+        # style_image is the picture boxes are CUT from, not a catch-all for
+        # anything undescribed — so it only fills in when there is a bbox to
+        # cut with. An unconditional fallback here made "text" unreachable
+        # whenever the analysis had a style_image: an object the user only
+        # described (a shield icon not in this screenshot) silently inherited
+        # the whole screen as its identity source. The measured cost: a
+        # conveyor loop boxed whole gave its track 80px of a 1024px picture
+        # and came back as a picture frame under every wording tried. An
+        # object that wants the whole shared picture now must name it
+        # explicitly as its own 'source' — deliberate, not a default.
+        entry["source"] = own_source or (style_image if bbox is not None else None)
+
+        if bbox is not None and entry["source"] is None:
+            raise BriefError(f"{where}: 'bbox' needs an image to cut out of — "
+                             "give the object a 'source' or the analysis a "
+                             "'style_image'")
         entry["bbox"] = list(bbox) if bbox is not None else None
         entry["views"] = prompts.normalise_views(obj.get("views"))
         # labelled_sheet captions each crop with this flag. Multiple views is

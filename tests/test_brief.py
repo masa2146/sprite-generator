@@ -207,6 +207,43 @@ def test_a_bbox_is_optional_now():
     assert brief.load_analysis(path).objects[0]["bbox"] is None
 
 
+def test_an_object_with_neither_bbox_nor_source_gets_no_picture_even_with_a_style_image():
+    """style_image is the picture boxes are CUT from, not a fallback for
+    anything undescribed. The old unconditional fallback handed a purely
+    described object — "make me a shield icon in this screen's style", where
+    the shield is not in the screenshot — the entire screen as its identity
+    source, with nothing to cut it down. The measured relative: a conveyor
+    loop boxed whole gave its track 80px of a 1024px picture and came back as
+    a picture frame under every wording tried. With no bbox to cut, there is
+    nothing to inherit."""
+    path = _analysis_dir({"style": FULL_STYLE, "style_image": "shot.png",
+                          "objects": [{"id": "a", "subject": "x"}]})
+    obj = brief.load_analysis(path).objects[0]
+    assert obj["source"] is None
+    assert brief.crop_mode(obj) == "text"
+
+
+def test_an_object_with_a_bbox_and_no_source_still_inherits_the_style_image():
+    # the common case — a box cut out of the shared screenshot — must not regress
+    path = _analysis_dir({"style": FULL_STYLE, "style_image": "shot.png",
+                          "objects": [{"id": "a", "subject": "x",
+                                       "bbox": [10, 10, 90, 90]}]})
+    obj = brief.load_analysis(path).objects[0]
+    assert obj["source"].name == "shot.png"
+    assert brief.crop_mode(obj) == "crop"
+
+
+def test_an_object_may_name_the_shared_picture_as_its_own_whole_source():
+    # now that the fallback no longer hands out the shared picture for free,
+    # naming it explicitly as 'source' is the only way to ask for it whole
+    path = _analysis_dir({"style": FULL_STYLE, "style_image": "shot.png",
+                          "objects": [{"id": "a", "subject": "x",
+                                       "source": "shot.png"}]})
+    obj = brief.load_analysis(path).objects[0]
+    assert obj["source"].name == "shot.png"
+    assert brief.crop_mode(obj) == "whole"
+
+
 def test_an_empty_object_list_is_rejected():
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(tmp, _analysis(objects=[]))
@@ -266,6 +303,23 @@ def test_a_text_only_object_gets_no_crop_and_is_not_rejected():
     assert not rejected
     assert kept[0].get("crop") is None
     assert kept[0].get("palette") in (None, [])
+
+
+def test_a_text_only_object_writes_no_ref_even_with_a_style_image():
+    # a described-only object is a legitimate shape, not a failure — it must
+    # be kept, and must not silently inherit the shared screenshot as its ref
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (200, 200), (90, 90, 120)).save(d / "shot.png")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE, "style_image": "shot.png",
+        "objects": [{"id": "idea", "subject": "a shield, not in this screenshot"}],
+    }), encoding="utf-8")
+    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert not rejected
+    assert kept[0]["id"] == "idea"
+    assert kept[0].get("crop") is None
+    assert not (d / "refs" / "idea.png").exists()
 
 
 def test_boxes_are_only_compared_within_one_source_image():
