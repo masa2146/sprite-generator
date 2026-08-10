@@ -189,11 +189,36 @@ def ramp_bands(thresholds, ambient=0.42, diffuse=0.62):
     return f
 
 
+def _contact_shadow(sdf, p, L, k, tmax, steps):
+    """Quilez's single-march soft shadow, cut short.
+
+    Range is deliberately small: what a sprite needs is the darkening where
+    parts touch — a brow over an eye socket, a horn root against a skull —
+    not a shadow thrown across the scene. It is a SECOND march per lit pixel,
+    which is why it is off by default.
+
+    Known failure: on sharply cornered casters the stepping quantises and
+    bands. The published fix (Aaltonen, GDC 2018) triangulates the closest
+    approach; it is not implemented here because nothing in this project has
+    hit the banding yet.
+    """
+    res = np.ones(p.shape[0])
+    t = np.full(p.shape[0], 0.02)
+    for _ in range(steps):
+        h = sdf(p + L*t[:, None])
+        res = np.minimum(res, k*h/np.maximum(t, 1e-6))
+        t += np.clip(h, 0.01, 0.1)
+        if (t > tmax).all():
+            break
+    return np.clip(res, 0.0, 1.0)
+
+
 # ------------------------------------------------------------ renderer
 def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
            light=None, ambient=0.42, diffuse=0.62, spec=0.5, shininess=40,
            rim=0.10, ao=0.55, ao_radius=0.12, frame=1.15, bg_alpha=0,
-           spec_color=(255, 255, 255), rim_color=(255, 255, 255), ramp=None):
+           spec_color=(255, 255, 255), rim_color=(255, 255, 255), ramp=None,
+           shadow=False, shadow_k=8.0, shadow_max=0.35, shadow_steps=12):
     """Render an SDF to a final-size RGBA sprite.
 
     tilt: camera pitch in degrees (looking down when positive).
@@ -208,6 +233,10 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
     a caller that passes its own ramp has taken responsibility for both.
     Everything else is standard Blinn-Phong with a fake AO term derived from
     how concave the neighborhood is (cheap, stable, good enough for sprites).
+    shadow: contact-darkening only (see _contact_shadow) - a second march per
+    lit pixel, off by default because full-size renders already take
+    minutes. shadow_k/shadow_max/shadow_steps tune that march; they do
+    nothing while shadow is False.
     """
     W, H = size
     w, h = W*OVERSAMPLE, H*OVERSAMPLE
@@ -328,6 +357,9 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
             occ += (hstep - sdf(ph + nh*hstep)) * sca
             sca *= 0.95
         aoterm = np.clip(1.0 - 3.0*ao*occ, 0, 1)
+        if shadow:
+            aoterm = aoterm * _contact_shadow(sdf, ph + nh*0.01, L, shadow_k,
+                                              shadow_max, shadow_steps)
         rimterm = rim_a * np.clip(1 - nh[:, 2], 0, 1)**2
         shade_t = (ramp or ramp_linear(ambient, diffuse))(lam)
         c = base*shade_t[:, None]*aoterm[:, None] \

@@ -7,7 +7,7 @@ from PIL import Image
 
 import sdf3d
 from sdf3d import flat, render, sphere, squash, torus_z, torus_y, scale_y
-from sdf3d import material, surface, union
+from sdf3d import material, surface, union, rounded_box
 from sdf3d import ramp_bands, ramp_linear
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -216,6 +216,37 @@ def test_a_hard_specular_is_bit_identical_to_spec_zero_in_shadow():
                           light=_HARD_SPEC_LIGHT)).astype(int)
     assert h[18, 15, 0] > b[18, 15, 0] + 100, (h[18, 15, 0], b[18, 15, 0])
     assert np.array_equal(h[8, 21], b[8, 21]), (h[8, 21], b[8, 21])
+
+
+def test_contact_shadow_darkens_what_sits_under_an_overhang():
+    """A ball resting on a slab: with the shadow on, the slab right beneath
+    the ball has to go darker than the slab far from it."""
+    slab = rounded_box((0.8, 0.06, 0.5), 0.03, (0.0, -0.45, 0.0))
+    ball = sphere(0.30, (0.0, -0.10, 0.0))
+    shape = union(slab, ball)
+    kw = dict(color=flat((200, 200, 200)), ao=0.0, rim=0.0, spec=0.0,
+              light=(0.0, 1.0, 0.25))
+    off = np.asarray(_small(shape, **kw)).astype(int)
+    on = np.asarray(_small(shape, shadow=True, **kw)).astype(int)
+    # row 21, col 16 traced by hand: hit point (0.037, -0.389, 0.123),
+    # normal (0, 1, 0) exactly - the slab's flat top, directly under the
+    # ball's centre (x=0), well within its z=0.3 radius. col 6 on the same
+    # row is (-0.705, -0.389, 0.123), same flat normal, outside the ball's
+    # footprint - both on-silhouette (alpha 255), neither a background miss.
+    row = 21
+    under = on[row, 16, :3].mean()
+    away = on[row, 6, :3].mean()
+    assert under < away - 10, (under, away)
+    assert under < off[row, 16, :3].mean() - 10
+
+
+def test_the_shadow_costs_nothing_when_it_is_off():
+    """Off must mean the second march never runs, not that it runs and is
+    discarded — the renderer already takes minutes at full size."""
+    kw = dict(color=flat((200, 200, 200)), ao=0.0, rim=0.0)
+    a = np.asarray(_small(sphere(0.7), **kw))
+    b = np.asarray(_small(sphere(0.7), shadow=False, **kw))
+    assert np.array_equal(a, b)
 
 
 def test_a_banded_render_has_flat_steps():
