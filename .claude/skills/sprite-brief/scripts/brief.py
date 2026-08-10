@@ -20,6 +20,7 @@ import json
 import shutil
 import sys
 import webbrowser
+from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image
@@ -33,25 +34,68 @@ class BriefError(Exception):
     """The analysis could not be turned into a brief."""
 
 
-def load_analysis(path) -> tuple[str, list[dict]]:
-    """Read and validate analysis.json. Returns (style, objects).
+STYLE_FIELDS = ("render", "camera", "lighting", "palette", "linework", "realism")
+UNSTATED = "belirtilmemiş"
 
-    Every error names the offending field, and the object's id where there is
-    one: this file is meant to be hand-edited between runs, so an error that
-    only says "invalid" costs the user a hunt.
+
+@dataclass
+class Analysis:
+    style: dict          # six fields, every one a non-empty string
+    style_source: dict   # field -> "kullanıcı" | "stil görseli" | "referans" | "ölçüm" | "varsayılan"
+    style_image: Path | None
+    objects: list[dict]  # each with id, views, animated, source: Path|None, bbox: list|None
+
+
+def _resolve(raw, base: Path, where: str) -> Path | None:
+    """A path from the analysis, resolved against the analysis file.
+
+    Against the file and not the cwd: the analysis carries its images with it,
+    and the review loop runs it again from wherever the user happens to be.
     """
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise BriefError(f"{where}: image path must be a non-empty string")
+    path = Path(raw)
+    resolved = (path if path.is_absolute() else base / path).resolve()
+    if not resolved.exists():
+        raise BriefError(f"{where}: no such image: {raw}")
+    return resolved
+
+
+def load_analysis(path) -> Analysis:
+    """Read and validate analysis.json. Every error names the offending field,
+    and the object's id where there is one: this file is hand-edited between
+    runs, and an error that only says "invalid" costs the user a hunt."""
     path = Path(path)
+    base = path.parent.resolve()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise BriefError(f"cannot read {path.name}: {exc}") from exc
-
     if not isinstance(raw, dict):
         raise BriefError("analysis must be a JSON object")
 
     style = raw.get("style")
-    if not isinstance(style, str) or not style.strip():
-        raise BriefError("'style' is required and must be a non-empty string")
+    if not isinstance(style, dict):
+        raise BriefError(
+            "'style' must be an object with the fields: " + ", ".join(STYLE_FIELDS))
+    missing = [f for f in STYLE_FIELDS
+               if not isinstance(style.get(f), str) or not style[f].strip()]
+    if missing:
+        raise BriefError(f"style is missing {len(missing)} field(s): "
+                         + ", ".join(missing))
+    style = {f: style[f].strip() for f in STYLE_FIELDS}
+
+    raw_source = raw.get("style_source") or {}
+    if not isinstance(raw_source, dict):
+        raise BriefError("'style_source' must be an object when given")
+    # A field nobody claimed is stamped, not guessed. The review page prints
+    # this beside every field, so an override that landed on the wrong one is
+    # visible instead of silent.
+    style_source = {f: str(raw_source.get(f) or UNSTATED).strip() for f in STYLE_FIELDS}
+
+    style_image = _resolve(raw.get("style_image"), base, "style_image")
 
     objects = raw.get("objects")
     if not isinstance(objects, list) or not objects:
@@ -64,12 +108,20 @@ def load_analysis(path) -> tuple[str, list[dict]]:
         obj_id = obj.get("id")
         if not isinstance(obj_id, str) or not obj_id.strip():
             raise BriefError(f"objects[{index}]: 'id' is required")
-        bbox = obj.get("bbox")
-        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
-            raise BriefError(
-                f"objects[{index}] ({obj_id}): 'bbox' must be [x1, y1, x2, y2]"
-            )
+        where = f"objects[{index}] ({obj_id})"
+
         entry = dict(obj)
+        entry["source"] = _resolve(obj.get("source"), base, where) or style_image
+
+        bbox = obj.get("bbox")
+        if bbox is not None:
+            if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                raise BriefError(f"{where}: 'bbox' must be [x1, y1, x2, y2]")
+            if entry["source"] is None:
+                raise BriefError(f"{where}: 'bbox' needs an image to cut out of — "
+                                 "give the object a 'source' or the analysis a "
+                                 "'style_image'")
+        entry["bbox"] = list(bbox) if bbox is not None else None
         entry["views"] = prompts.normalise_views(obj.get("views"))
         # labelled_sheet captions each crop with this flag. Multiple views is
         # the only motion signal this schema carries, so it is what the caption
@@ -77,12 +129,7 @@ def load_analysis(path) -> tuple[str, list[dict]]:
         # review step exists to catch.
         entry["animated"] = len(entry["views"]) > 1
         out.append(entry)
-
-    # Schema v1 carries style as one line. v2 (the next task) replaces this
-    # with the six-field object image-style produces; wrapping it here keeps
-    # the move honest — one change at a time.
-    style = {"render": style.strip()}
-    return style, out
+    return Analysis(style, style_source, style_image, out)
 
 
 _CSS = """
@@ -166,10 +213,9 @@ def _load_image(image_path: Path):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="brief",
-        description="Turn a screenshot and its analysis into crops and "
+        description="Turn an analysis of a screenshot into crops and "
                     "paste-ready prompts for manual generation.",
     )
-    parser.add_argument("--image", required=True, help="source screenshot")
     parser.add_argument("--analysis", required=True, help="analysis.json")
     parser.add_argument("--out-dir", required=True,
                         help="directory to create; refused if it already holds a brief")
@@ -177,7 +223,6 @@ def main(argv=None) -> int:
                         help="do not open the contact sheet")
     args = parser.parse_args(argv)
 
-    image_path = Path(args.image)
     analysis_path = Path(args.analysis)
     out_dir = Path(args.out_dir)
     refs_dir = out_dir / "refs"
@@ -197,14 +242,21 @@ def main(argv=None) -> int:
             return 1
 
     try:
-        style, objects = load_analysis(analysis_path)
-        image = _load_image(image_path)
+        parsed = load_analysis(analysis_path)
+        # The crop and the style copy below both need one whole image to work
+        # from; splitting a box's source per-object is task 8's job. Until
+        # then a brief needs a style_image the same way it used to need
+        # --image.
+        if parsed.style_image is None:
+            raise BriefError("'style_image' is required to crop and copy the "
+                             "reference screenshot")
+        image = _load_image(parsed.style_image)
     except BriefError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
     try:
-        kept, rejected = crops.crop_objects(image, objects, refs_dir)
+        kept, rejected = crops.crop_objects(image, parsed.objects, refs_dir)
     except OSError as exc:
         print(f"error: cannot write crops to {refs_dir}: {exc}", file=sys.stderr)
         return 1
@@ -228,7 +280,7 @@ def main(argv=None) -> int:
 
     style_copy = refs_dir / "_style.png"
     try:
-        shutil.copyfile(image_path, style_copy)
+        shutil.copyfile(parsed.style_image, style_copy)
     except OSError as exc:
         print(f"error: cannot write {style_copy}: {exc}", file=sys.stderr)
         return 1
@@ -246,14 +298,23 @@ def main(argv=None) -> int:
             entries.append({
                 "id": "{}-{}".format(obj["id"], view),
                 "crop": obj["crop"],
-                "prompt": prompts.asset_prompt(obj, view, style, contents.get(obj["id"])),
+                "prompt": prompts.asset_prompt(obj, view, parsed.style, contents.get(obj["id"])),
             })
 
     title = f"{out_dir.name} — prompts for manual generation"
     try:
         brief_path.write_text(page(entries, style_copy, title), encoding="utf-8")
         if analysis_path.resolve() != inner_analysis.resolve():
-            shutil.copyfile(analysis_path, inner_analysis)
+            # A straight copy would keep whatever image path the user wrote
+            # (often relative, resolved against analysis_path's own
+            # directory). The copy lives in out_dir instead, so a relative
+            # path would silently resolve against the wrong directory on the
+            # next rerun. Stamping in the already-resolved absolute path
+            # keeps the review loop ("edit analysis.json in place, run
+            # again") working from out_dir.
+            raw = json.loads(analysis_path.read_text(encoding="utf-8"))
+            raw["style_image"] = str(parsed.style_image)
+            inner_analysis.write_text(json.dumps(raw), encoding="utf-8")
     except OSError as exc:
         print(f"error: cannot write {brief_path}: {exc}", file=sys.stderr)
         return 1

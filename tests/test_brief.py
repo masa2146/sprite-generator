@@ -3,12 +3,21 @@ import json
 import tempfile
 from pathlib import Path
 
+from PIL import Image
+
 import brief
+
+FULL_STYLE = {
+    "render": "soft 3D cartoon", "camera": "3/4 front view",
+    "lighting": "top-left key", "palette": "#2e2c4a, #ffffff",
+    "linework": "dark contour", "realism": "stylized cartoon",
+}
 
 
 def _analysis(**overrides):
     data = {
-        "style": "soft 3D cartoon, glossy plastic, #2e2c4a, #ffffff",
+        "style": dict(FULL_STYLE),
+        "style_image": "scene.png",
         "objects": [
             {
                 "id": "alpha",
@@ -25,20 +34,26 @@ def _analysis(**overrides):
 
 
 def _write(tmp, data):
-    path = Path(tmp) / "analysis.json"
+    """Write analysis.json, and a dummy image for its style_image if that
+    file is not already there — v2 resolves image paths against the analysis
+    file and requires them to exist, so any object carrying a bbox needs one
+    on disk."""
+    tmp = Path(tmp)
+    img_name = data.get("style_image")
+    if img_name and not (tmp / img_name).exists():
+        Image.new("RGB", (200, 200), (90, 90, 120)).save(tmp / img_name)
+    path = tmp / "analysis.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     return path
 
 
 def test_load_analysis_returns_style_and_objects():
     with tempfile.TemporaryDirectory() as tmp:
-        style, objects = brief.load_analysis(_write(tmp, _analysis()))
-    # Schema v1's one-line style, wrapped as the dict prompts.asset_prompt
-    # expects — see the bridge comment in load_analysis.
-    assert style == {"render": "soft 3D cartoon, glossy plastic, #2e2c4a, #ffffff"}
-    assert [o["id"] for o in objects] == ["alpha"]
-    assert objects[0]["views"] == ["front", "side"]
-    assert objects[0]["animated"] is True
+        parsed = brief.load_analysis(_write(tmp, _analysis()))
+    assert parsed.style == FULL_STYLE
+    assert [o["id"] for o in parsed.objects] == ["alpha"]
+    assert parsed.objects[0]["views"] == ["front", "side"]
+    assert parsed.objects[0]["animated"] is True
 
 
 def test_a_single_view_object_is_not_marked_animated():
@@ -47,8 +62,8 @@ def test_a_single_view_object_is_not_marked_animated():
     data = _analysis()
     data["objects"][0]["views"] = ["front"]
     with tempfile.TemporaryDirectory() as tmp:
-        _style, objects = brief.load_analysis(_write(tmp, data))
-    assert objects[0]["animated"] is False
+        parsed = brief.load_analysis(_write(tmp, data))
+    assert parsed.objects[0]["animated"] is False
 
 
 def test_a_missing_style_is_named_in_the_error():
@@ -75,6 +90,119 @@ def test_a_bad_bbox_names_the_object_and_the_field():
             assert "alpha" in str(exc) and "bbox" in str(exc)
         else:
             raise AssertionError("expected BriefError")
+
+
+# --- v2 schema: six-field style, style_source, per-object source, optional bbox
+
+def _analysis_dir(payload, images=("shot.png",)):
+    d = Path(tempfile.mkdtemp())
+    for name in images:
+        Image.new("RGB", (200, 200), (90, 90, 120)).save(d / name)
+    path = d / "analysis.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_the_six_style_fields_are_read_as_an_object():
+    path = _analysis_dir({
+        "style": FULL_STYLE, "style_image": "shot.png",
+        "objects": [{"id": "a", "subject": "a thing", "bbox": [10, 10, 90, 90]}],
+    })
+    parsed = brief.load_analysis(path)
+    assert parsed.style["camera"] == "3/4 front view"
+    assert parsed.style_image.name == "shot.png"
+
+
+def test_a_missing_style_field_is_named_in_the_error():
+    partial = dict(FULL_STYLE)
+    del partial["lighting"]
+    path = _analysis_dir({"style": partial,
+                          "objects": [{"id": "a", "subject": "x"}]})
+    try:
+        brief.load_analysis(path)
+        assert False, "a missing style field must not pass"
+    except brief.BriefError as exc:
+        assert "lighting" in str(exc)
+
+
+def test_a_style_given_as_one_string_is_rejected_with_the_shape_it_wants():
+    path = _analysis_dir({"style": "glossy cartoon",
+                          "objects": [{"id": "a", "subject": "x"}]})
+    try:
+        brief.load_analysis(path)
+        assert False, "schema v1 style must not pass"
+    except brief.BriefError as exc:
+        assert "render" in str(exc) and "camera" in str(exc)
+
+
+def test_an_unspecified_style_source_reads_as_belirtilmemis():
+    path = _analysis_dir({"style": FULL_STYLE,
+                          "style_source": {"render": "kullanıcı"},
+                          "objects": [{"id": "a", "subject": "x"}]})
+    parsed = brief.load_analysis(path)
+    assert parsed.style_source["render"] == "kullanıcı"
+    assert parsed.style_source["palette"] == "belirtilmemiş"
+
+
+def test_paths_resolve_against_the_analysis_file_not_the_cwd():
+    path = _analysis_dir({"style": FULL_STYLE, "style_image": "shot.png",
+                          "objects": [{"id": "a", "subject": "x"}]})
+    parsed = brief.load_analysis(path)
+    assert parsed.style_image.is_absolute()
+    assert parsed.style_image.exists()
+
+
+def test_an_object_falls_back_to_the_style_image_for_its_source():
+    path = _analysis_dir({"style": FULL_STYLE, "style_image": "shot.png",
+                          "objects": [{"id": "a", "subject": "x",
+                                       "bbox": [10, 10, 90, 90]}]})
+    obj = brief.load_analysis(path).objects[0]
+    assert obj["source"].name == "shot.png"
+
+
+def test_an_object_may_name_its_own_source():
+    path = _analysis_dir({"style": FULL_STYLE, "style_image": "shot.png",
+                          "objects": [{"id": "a", "subject": "x",
+                                       "source": "other.png"}]},
+                         images=("shot.png", "other.png"))
+    assert brief.load_analysis(path).objects[0]["source"].name == "other.png"
+
+
+def test_an_object_with_no_image_anywhere_is_allowed():
+    path = _analysis_dir({"style": FULL_STYLE,
+                          "objects": [{"id": "a", "subject": "x"}]},
+                         images=())
+    assert brief.load_analysis(path).objects[0]["source"] is None
+
+
+def test_a_bbox_without_an_image_names_the_object():
+    path = _analysis_dir({"style": FULL_STYLE,
+                          "objects": [{"id": "a", "subject": "x",
+                                       "bbox": [1, 1, 9, 9]}]},
+                         images=())
+    try:
+        brief.load_analysis(path)
+        assert False, "a box with nothing to cut it out of must not pass"
+    except brief.BriefError as exc:
+        assert "a" in str(exc) and "bbox" in str(exc)
+
+
+def test_a_missing_source_file_names_the_path():
+    path = _analysis_dir({"style": FULL_STYLE,
+                          "objects": [{"id": "a", "subject": "x",
+                                       "source": "gone.png"}]},
+                         images=())
+    try:
+        brief.load_analysis(path)
+        assert False, "a source that is not on disk must not pass"
+    except brief.BriefError as exc:
+        assert "gone.png" in str(exc)
+
+
+def test_a_bbox_is_optional_now():
+    path = _analysis_dir({"style": FULL_STYLE, "style_image": "shot.png",
+                          "objects": [{"id": "a", "subject": "x"}]})
+    assert brief.load_analysis(path).objects[0]["bbox"] is None
 
 
 def test_an_empty_object_list_is_rejected():
@@ -182,8 +310,7 @@ def _run(tmp, data=None, out_name="b", extra=None):
     scene = _scene(tmp)
     analysis = _write(tmp, data if data is not None else _analysis())
     out_dir = Path(tmp) / out_name
-    argv = ["--image", str(scene), "--analysis", str(analysis),
-            "--out-dir", str(out_dir)]
+    argv = ["--analysis", str(analysis), "--out-dir", str(out_dir)]
     return brief.main(argv + (extra or [])), out_dir, scene
 
 
@@ -269,14 +396,13 @@ def test_an_existing_brief_is_not_overwritten_from_an_outside_analysis():
 def test_rerunning_from_the_briefs_own_analysis_is_allowed():
     """The whole review loop is: edit analysis.json in place, run again."""
     with tempfile.TemporaryDirectory() as tmp:
-        code, out_dir, scene = _run(tmp)
+        code, out_dir, _scene_path = _run(tmp)
         assert code == 0
         inner = out_dir / "analysis.json"
         data = json.loads(inner.read_text())
         data["objects"][0]["subject"] = "a SECOND PASS rabbit"
         inner.write_text(json.dumps(data), encoding="utf-8")
-        code2 = brief.main(["--image", str(scene), "--analysis", str(inner),
-                            "--out-dir", str(out_dir)])
+        code2 = brief.main(["--analysis", str(inner), "--out-dir", str(out_dir)])
         assert code2 == 0
         assert "a SECOND PASS rabbit" in (out_dir / "brief.html").read_text()
 
@@ -292,10 +418,12 @@ def test_a_bad_analysis_writes_nothing_and_exits_one():
 
 def test_an_unreadable_image_exits_one():
     with tempfile.TemporaryDirectory() as tmp:
-        bad = Path(tmp) / "bad.png"
+        # _analysis()'s style_image is "scene.png" — write the corrupt file
+        # there directly so _write finds it already on disk and leaves it be.
+        bad = Path(tmp) / "scene.png"
         bad.write_text("not an image", encoding="utf-8")
         analysis = _write(tmp, _analysis())
-        code = brief.main(["--image", str(bad), "--analysis", str(analysis),
+        code = brief.main(["--analysis", str(analysis),
                            "--out-dir", str(Path(tmp) / "b")])
     assert code == 1
 
