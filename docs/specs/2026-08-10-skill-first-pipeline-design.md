@@ -151,8 +151,15 @@ Değişenler:
 - `style_source` yeni: her alanın nereden geldiği — `kullanıcı`, `stil görseli`,
   `referans`, `ölçüm`, `varsayılan`. `review.html` bunu her alanın yanında basar.
 - `style_image` opsiyonel.
-- `source` yeni: nesnenin geldiği görsel. Yoksa `style_image`, o da yoksa nesne
-  görselsizdir.
+- `source` yeni: nesnenin geldiği görsel. Kendi `source`'u yoksa **yalnızca
+  `bbox`'u varsa** `style_image`'a düşer; ikisi de yoksa nesne görselsizdir.
+
+  Koşul kasıtlı. `style_image` kutuların kesildiği paylaşılan görseldir, her
+  nesnenin varsayılan referansı değil. Koşulsuz düştüğü sürümde, stil görseli
+  verilen bir analizde sadece sözle tarif edilmiş bir nesne mümkün olmuyordu:
+  referansı sessizce tüm ekran görüntüsü oluyor, prompt "Picture 1 — yeniden
+  çizeceğin nesne" derken Picture 1 bütün oyun ekranı oluyordu. Tüm görseli
+  referans isteyen nesne onu kendi `source`'unda adıyla yazar.
 - `bbox` artık opsiyonel. Yoksa kaynak görselin tamamı kullanılır.
 - `camera` alanı artık serbest — hatta gerekli (aşağı bakınız).
 
@@ -187,7 +194,7 @@ dizinine göre değil: analiz kendi görselleriyle birlikte taşınabilir olmal�
 
 | girdi | davranış |
 |---|---|
-| görsel yok, yalnızca metin | `bbox` yok, `refs/` boş, kırpma çalışmaz; stil kullanıcının sözlerinden |
+| görsel yok, yalnızca metin | `bbox` yok, `source` yok — stil görseli olsa bile; `refs/` boş, kırpma çalışmaz |
 | tek görsel, tek nesne kadrajı dolduruyor | kırpma yok; görsel `refs/<id>.png` olur, yine temizlikten geçer |
 | tek ekran görüntüsü, çok nesne | nesne başına `bbox`, her biri ayrı kırpılır (bugünkü davranış) |
 | birden çok bağımsız görsel | her görsel kendi nesnesi (`source`), kırpma yok; içlerinden biri çok nesne taşıyorsa yalnız o kırpılır |

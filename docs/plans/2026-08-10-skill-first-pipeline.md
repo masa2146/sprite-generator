@@ -952,7 +952,15 @@ def load_analysis(path) -> Analysis:
         where = f"objects[{index}] ({obj_id})"
 
         entry = dict(obj)
-        entry["source"] = _resolve(obj.get("source"), base, where) or style_image
+        # Task 8b (human decision, after task 9's review): the shared style
+        # image is what boxes are cut from, not every object's default
+        # reference. Falling back unconditionally made a described-only object
+        # impossible whenever a style image existed — its reference silently
+        # became the whole screenshot, against a prompt saying "Picture 1 — the
+        # object to redraw". An object that wants the whole picture names it.
+        entry["source"] = _resolve(obj.get("source"), base, where)
+        if entry["source"] is None and obj.get("bbox") is not None:
+            entry["source"] = style_image
 
         bbox = obj.get("bbox")
         if bbox is not None:
