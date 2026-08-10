@@ -267,7 +267,7 @@ Kutu geometrisi ve contact sheet. Saf PIL; hiçbir yeri ağa dokunmaz.
 
 - [ ] **Step 1: Failing test'leri yaz**
 
-`tests/test_crops.py`. `tests/test_extract.py`'den şu testleri **birebir** taşı (yalnızca `from spritegen import extract` → `import crops as extract` satırı değişir):
+`tests/test_crops.py`. `tests/test_extract.py`'den şu testleri taşı — gövdeleri aynen, yalnızca `from spritegen import extract` importu `import crops` olur ve gövdelerdeki `extract.` çağrıları `crops.` yapılır (takma ad kullanma; dosya artık `crops` modülünü test ediyor ve iki isim taşımasının bir sebebi yok):
 
 `test_a_normal_box_is_accepted`, `test_a_box_outside_the_image_is_rejected`, `test_a_zero_or_inverted_box_is_rejected`, `test_a_box_covering_the_whole_image_is_rejected`, `test_a_tiny_box_is_rejected`, `test_a_malformed_box_is_rejected`, `test_crop_objects_writes_one_file_per_object`, `test_crop_dimensions_match_the_padded_box`, `test_a_rejected_box_is_reported_and_skipped`, `test_an_object_without_an_id_is_rejected_not_crashed`, `test_a_duplicate_id_is_rejected_and_the_first_crop_survives`, `test_an_id_that_would_escape_the_refs_dir_is_rejected`, `test_an_id_with_a_slash_is_rejected`, `test_labelled_sheet_is_written_and_readable`, `test_labelled_sheet_handles_a_single_entry`, `test_ids_differing_only_in_case_are_rejected_as_duplicates`, `test_the_crop_is_padded_beyond_the_model_s_box`, `test_padding_is_clamped_to_the_image`, `test_crop_objects_writes_the_padded_region`, `test_one_huge_crop_does_not_blow_up_the_contact_sheet`, `test_a_framing_box_reports_what_it_swallows`, `test_a_neighbouring_box_is_not_contained`, `test_a_box_overlapping_only_at_its_edge_is_not_contained`, `test_equal_boxes_do_not_contain_each_other`, `test_blank_contents_paints_a_framed_object_out_of_its_container_crop`, `test_a_framed_object_loses_the_wall_its_padding_dragged_in`, `test_hand_written_blank_boxes_are_painted_out`, `test_a_blanked_box_is_filled_from_its_own_surroundings`.
 
@@ -367,19 +367,32 @@ from PIL import Image
 
 `clean_crops`'un `entry["palette"]`'i doldurduğunu hiçbir test doğrulamıyor; prompt'un `PALETTE` satırı buna dayanıyor.
 
+Dosyanın import bloğu şu hâle gelir:
+
 ```python
-def test_clean_crops_records_the_measured_palette_on_each_entry(tmp_path=None):
-    import tempfile
-    from pathlib import Path
+import tempfile
+from pathlib import Path
+
+import refclean
+from PIL import Image
+```
+
+```python
+def test_clean_crops_records_the_measured_palette_on_each_entry():
     d = Path(tempfile.mkdtemp())
     crop = d / "brick.png"
     Image.new("RGB", (40, 40), (67, 67, 117)).save(crop)
     entries = [{"id": "brick", "crop": crop}]
     refclean.clean_crops(entries)
     assert entries[0]["palette"], "no palette recorded"
-    assert entries[0]["palette"][0].startswith("#")
-    # the dominant colour is the one that is actually there
-    assert entries[0]["palette"][0] in ("#434375", "#434374", "#444376")
+    top = entries[0]["palette"][0]
+    assert top.startswith("#") and len(top) == 7
+    # The dominant colour is the one that is really there. Compared with a
+    # tolerance, not for equality: flat_field divides by a blurred copy of the
+    # image before the palette is measured, so an exact match would be a test
+    # of the correction's rounding rather than of the palette.
+    rgb = tuple(int(top[i:i + 2], 16) for i in (1, 3, 5))
+    assert all(abs(a - b) <= 12 for a, b in zip(rgb, (67, 67, 117))), top
 ```
 
 - [ ] **Step 4: Test'lerin geçtiğini gör**
@@ -1191,6 +1204,8 @@ be pure damage."
 
 - [ ] **Step 1: Failing test'leri yaz**
 
+Dosyaya `import re` ekle (yeni palet testi kullanıyor).
+
 ```python
 def _rendered(objects, style_image="shot.png", images=("shot.png",)):
     d = Path(tempfile.mkdtemp())
@@ -1215,9 +1230,14 @@ def test_the_review_section_prints_every_style_field_with_its_source():
     assert "belirtilmemiş" in html          # the fields nobody claimed
 
 
-def test_the_review_section_shows_the_measured_palette():
+def test_the_review_section_shows_the_measured_palette_as_swatches():
     html = _rendered([{"id": "a", "subject": "x", "bbox": [10, 10, 90, 90]}])
-    assert "#5A5A78" in html or "#" in html.split("PALETTE")[0]
+    swatches = re.findall(r"class='swatch' style='background:(#[0-9A-Fa-f]{6})'", html)
+    assert swatches, "no measured colour reached the page"
+    # the crop is one flat colour, so its dominant swatch is that colour
+    rgb = tuple(int(swatches[0][i:i + 2], 16) for i in (1, 3, 5))
+    assert all(abs(a - b) <= 12 for a, b in zip(rgb, (90, 90, 120))), swatches[0]
+    assert f"<code>{swatches[0]}</code>" in html
 
 
 def test_the_prompt_section_carries_a_paste_ready_block_per_view():
