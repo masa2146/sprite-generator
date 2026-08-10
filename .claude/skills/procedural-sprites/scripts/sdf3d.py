@@ -218,7 +218,8 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
            light=None, ambient=0.42, diffuse=0.62, spec=0.5, shininess=40,
            rim=0.10, ao=0.55, ao_radius=0.12, frame=1.15, bg_alpha=0,
            spec_color=(255, 255, 255), rim_color=(255, 255, 255), ramp=None,
-           shadow=False, shadow_k=8.0, shadow_max=0.35, shadow_steps=12):
+           shadow=False, shadow_k=8.0, shadow_max=0.35, shadow_steps=12,
+           buffers=False):
     """Render an SDF to a final-size RGBA sprite.
 
     tilt: camera pitch in degrees (looking down when positive).
@@ -237,6 +238,11 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
     lit pixel, off by default because full-size renders already take
     minutes. shadow_k/shadow_max/shadow_steps tune that march; they do
     nothing while shadow is False.
+    buffers: when True, also return the per-pixel depth and normal the
+    raymarch already computes (see interior_edges) - (img, depth, normal)
+    instead of just img. depth is (H, W) with np.inf where the ray missed;
+    normal is (H, W, 3). Off by default so every existing caller is
+    unaffected.
     """
     W, H = size
     w, h = W*OVERSAMPLE, H*OVERSAMPLE
@@ -372,11 +378,49 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
     img = np.concatenate([shade, alpha[:, None]], axis=1)
     img = img.reshape(h, w, 4).astype(np.uint8)
     out = Image.fromarray(img, 'RGBA').resize((W, H), Image.LANCZOS)
+
+    if buffers:
+        # Downsample BEFORE the LANCZOS resize above touches these: depth and
+        # normal are per-ray quantities computed at OVERSAMPLE resolution, and
+        # they need to come back at the same size as `out`, not blurred by an
+        # image filter that was designed for colour.
+        d2 = np.where(hit, t, np.inf).reshape(h, w)
+        n2 = n.reshape(h, w, 3)
+        if OVERSAMPLE > 1:
+            d2 = d2[::OVERSAMPLE, ::OVERSAMPLE]
+            n2 = n2[::OVERSAMPLE, ::OVERSAMPLE]
+
     if bg_alpha:
         bgimg = Image.new('RGBA', (W, H), (128, 128, 128, 255))
         bgimg.alpha_composite(out)
+        if buffers:
+            return bgimg, d2, n2
         return bgimg
+    if buffers:
+        return out, d2, n2
     return out
+
+
+def interior_edges(depth, normal, depth_eps=0.02, normal_eps=0.25):
+    """Lines where depth or normal jumps between neighbouring pixels.
+
+    This is how the technique is done in practice, and it gives the one thing
+    an alpha contour cannot: the line INSIDE the silhouette, where one part
+    crosses another. Both buffers are needed - two parts at the same depth
+    still differ in normal, and a smooth fold differs in depth but not much
+    in normal.
+    """
+    d = np.where(np.isinf(depth), np.nanmax(depth[~np.isinf(depth)]) + 1.0,
+                 depth)
+    edge = np.zeros(d.shape, bool)
+    for axis in (0, 1):
+        dd = np.abs(np.diff(d, axis=axis, prepend=d.take([0], axis=axis)))
+        nn = np.linalg.norm(
+            np.diff(normal, axis=axis,
+                    prepend=normal.take([0], axis=axis)), axis=-1)
+        edge |= (dd > depth_eps) | (nn > normal_eps)
+    inside = ~np.isinf(depth)
+    return Image.fromarray((edge & inside).astype(np.uint8) * 255, "L")
 
 
 # ------------------------------------------ object-space materials (v4)

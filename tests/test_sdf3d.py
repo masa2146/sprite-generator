@@ -9,6 +9,7 @@ import sdf3d
 from sdf3d import flat, render, sphere, squash, torus_z, torus_y, scale_y
 from sdf3d import material, surface, union, rounded_box
 from sdf3d import ramp_bands, ramp_linear
+from sdf3d import interior_edges
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -247,6 +248,31 @@ def test_the_shadow_costs_nothing_when_it_is_off():
     a = np.asarray(_small(sphere(0.7), **kw))
     b = np.asarray(_small(sphere(0.7), shadow=False, **kw))
     assert np.array_equal(a, b)
+
+
+def test_buffers_come_back_at_the_final_size():
+    img, depth, normal = _small(sphere(0.7), color=flat((200, 200, 200)),
+                                buffers=True)
+    assert img.size == (32, 32)
+    assert depth.shape == (32, 32)
+    assert normal.shape == (32, 32, 3)
+    assert np.isinf(depth[0, 0])           # a corner ray misses
+
+
+def test_an_interior_edge_appears_where_two_parts_cross():
+    """The alpha contour can only draw the outside. Where an arm crosses a
+    body — or a horn crosses a skull — the line has to come from the depth
+    and normal buffers, which the renderer already computes and used to
+    throw away."""
+    front = sphere(0.34, (-0.12, 0.0, 0.45))
+    back = sphere(0.46, (0.14, 0.0, -0.2))
+    _, depth, normal = _small(union(front, back),
+                              color=flat((200, 200, 200)), buffers=True)
+    edges = np.asarray(interior_edges(depth, normal))
+    assert edges.max() == 255
+    # the line is inside the silhouette, not on its rim
+    inner = edges[6:26, 6:26]
+    assert inner.max() == 255, inner.max()
 
 
 def test_a_banded_render_has_flat_steps():
