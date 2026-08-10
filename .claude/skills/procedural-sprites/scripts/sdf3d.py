@@ -233,17 +233,34 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
     shade = np.zeros((origins.shape[0], 3))
     if hit.any():
         ph, nh = p[hit], n[hit]
+        rows = ph.shape[0]
+        # A Surface carries its own spec/shininess/rim per hit point, gathered
+        # from the nearest part; a plain colour function (every existing
+        # asset) still gets the scene-wide scalars, broadcast into arrays so
+        # the shading arithmetic below has one shape to work with either way.
+        if isinstance(color, Surface):
+            base, spec_a, shin_a, rim_a, scol_a, hard_a = color.resolve(ph, nh)
+        else:
+            base = color(ph, nh)
+            spec_a = np.full(rows, float(spec))
+            shin_a = np.full(rows, float(shininess))
+            rim_a = np.full(rows, float(rim))
+            scol_a = np.broadcast_to(np.array(spec_color, float), (rows, 3))
+            hard_a = np.full(rows, np.nan)
+        # rim_color stays a scene-wide parameter, not a per-material one:
+        # Material.rim is intensity only, so its colour is this scalar for
+        # every part, exactly like scol_a is for the scalar (non-Surface) path.
+        rcol_a = np.broadcast_to(np.array(rim_color, float), (rows, 3))
+
         lam = np.clip(nh @ L, 0, 1)
         Hv = L + np.array([0, 0, 1.0]); Hv /= np.linalg.norm(Hv)
-        sp = np.clip(nh @ Hv, 0, 1) ** shininess
+        sp = np.clip(nh @ Hv, 0, 1) ** shin_a
         # fake AO: sample the SDF a bit along the normal; concave -> darker
         occ = np.clip(sdf(ph + nh*0.08) / 0.08, 0, 1)
         aoterm = 1 - ao*(1 - occ)
-        rimterm = rim * np.clip(1 - nh[:, 2], 0, 1)**2
-        base = color(ph, nh)
-        sc = np.array(spec_color, float); rc = np.array(rim_color, float)
+        rimterm = rim_a * np.clip(1 - nh[:, 2], 0, 1)**2
         c = base*(ambient + diffuse*lam[:, None])*aoterm[:, None] \
-            + sc*spec*sp[:, None] + rc*rimterm[:, None]
+            + scol_a*(spec_a*sp)[:, None] + rcol_a*rimterm[:, None]
         shade[hit] = np.clip(c, 0, 255)
 
     # smooth alpha from the miss distance at the surface (AA at silhouette)
@@ -260,22 +277,69 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
 
 
 # ------------------------------------------ object-space materials (v4)
-def part_color(parts):
-    """Color by nearest part: parts = [(sdf_fn, rgb_or_color_fn), ...].
-    At each surface point the part whose SDF is closest to zero wins. Use it
-    to give sub-shapes their own material (pink inner ear on a white ear)
-    WITHOUT touching geometry - the parts just need to sit on the surface."""
-    def color(p, n):
-        ds = np.stack([np.abs(f(p)) for f, _ in parts], axis=-1)
+class Material:
+    """A part's colour AND its surface. Splitting these was the ceiling: the
+    old part_color varied colour alone, so bone, hide and metal came out of
+    one render with the same gloss."""
+    __slots__ = ("color", "spec", "shininess", "rim", "spec_color", "spec_hard")
+
+    def __init__(self, color, spec, shininess, rim, spec_color, spec_hard):
+        self.color = color
+        self.spec = spec
+        self.shininess = shininess
+        self.rim = rim
+        self.spec_color = spec_color
+        self.spec_hard = spec_hard
+
+
+def material(color, spec=0.5, shininess=40, rim=0.10,
+             spec_color=(255, 255, 255), spec_hard=None):
+    return Material(color, spec, shininess, rim, spec_color, spec_hard)
+
+
+class Surface:
+    """Materials keyed by nearest part.
+
+    At each surface point the part whose SDF reads closest to zero wins. That
+    is exact for a hard `union` and WRONG inside a `smooth_union` band, where
+    the surface belongs to neither part — so blend softly only within one
+    material, and hard-union anything that needs its own.
+    """
+    def __init__(self, parts):
+        self.parts = list(parts)
+
+    def resolve(self, p, n):
+        ds = np.stack([np.abs(f(p)) for f, _ in self.parts], axis=-1)
         idx = ds.argmin(axis=-1)
-        out = np.zeros(p.shape[:-1] + (3,))
-        for i, (_, c) in enumerate(parts):
-            m = idx == i
-            if not m.any():
+        rows = p.shape[0]
+        base = np.zeros((rows, 3))
+        spec = np.zeros(rows)
+        shin = np.zeros(rows)
+        rim = np.zeros(rows)
+        scol = np.zeros((rows, 3))
+        hard = np.full(rows, np.nan)
+        for i, (_, m) in enumerate(self.parts):
+            msk = idx == i
+            if not msk.any():
                 continue
-            out[m] = c(p[m], n[m]) if callable(c) else np.array(c, float)
-        return out
-    return color
+            c = m.color
+            base[msk] = c(p[msk], n[msk]) if callable(c) else np.array(c, float)
+            spec[msk] = m.spec
+            shin[msk] = m.shininess
+            rim[msk] = m.rim
+            scol[msk] = np.array(m.spec_color, float)
+            if m.spec_hard is not None:
+                hard[msk] = m.spec_hard
+        return base, spec, shin, rim, scol, hard
+
+    def __call__(self, p, n):
+        """Colour only, so a Surface can be the base of spots(): face decals
+        paint over a body that already has materials."""
+        return self.resolve(p, n)[0]
+
+
+def surface(parts):
+    return Surface(parts)
 
 
 def spots(base, decals, center=(0, 0, 0)):
