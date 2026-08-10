@@ -326,6 +326,40 @@ def apply_relief(dst, mask, base_rgb_layer, **kw):
     dst.alpha_composite(Image.composite(Image.fromarray(out), black, mask))
 
 
+# ------------------------------------------------------------ readability
+def readability(img, size=(44, 52)):
+    """What survives the shrink to on-screen size, as numbers.
+
+    This measures and reports; it does not decide. Which counts are enough is
+    the asset's own acceptance criterion and belongs in the asset's script --
+    one obstacle needs its brow bar to survive, a UI pill needs nothing of
+    the sort.
+    """
+    small = np.asarray(img.resize(size, Image.LANCZOS))
+    rgb = small[..., :3].astype(int)
+    on = small[..., 3].astype(int) > 100
+    return dict(dark=int(((rgb.max(axis=-1) < 90) & on).sum()),
+               pale=int(((rgb.min(axis=-1) > 170) & on).sum()),
+               coverage=round(float(on.mean()), 3))
+
+
+def silhouette(img, color=(0, 0, 0)):
+    """The sprite filled flat, for a workshop habit of a readability check:
+    look at the shape alone and see whether it still says what the thing is.
+    Not a verified industry standard -- just a picture worth looking at."""
+    out = Image.new("RGBA", img.size, tuple(color) + (0,))
+    out.putalpha(img.getchannel("A"))
+    return out
+
+
+def qc_strip(img, sizes, path, bg=(128, 128, 128, 255)):
+    """The sprite at the sizes the game actually draws it, on the game's own
+    backdrop colour. A sprite that does not read here does not ship, however
+    good it looks at 1024."""
+    return contact_sheet([(img.resize(s, Image.LANCZOS), None) for s in sizes],
+                         path, bg=bg)
+
+
 # ------------------------------------------------ reference comparison (v2)
 def side_by_side(ref_path, render, out_path, height=280,
                  bg=(128, 128, 128, 255)):

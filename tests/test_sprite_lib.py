@@ -3,7 +3,7 @@ measurements that decide whether a sprite ships."""
 import numpy as np
 from PIL import Image, ImageFilter
 
-from sprite_lib import contour
+from sprite_lib import contour, qc_strip, readability, silhouette
 
 
 def _disc(size=64, r=20):
@@ -115,3 +115,28 @@ def test_the_contour_stays_opaque_over_a_pre_softened_edge():
     soft_darkest = soft_side[soft_side[:, 3] > 128][:, :3].sum(axis=-1).min()
     assert hard_darkest < 200, hard_darkest
     assert soft_darkest < 200, soft_darkest
+
+
+def test_readability_counts_dark_and_pale_pixels_at_game_size():
+    # _disc fills with (220, 90, 60) -- min channel 60, well under the
+    # pale floor of 170, so this disc can never register as pale pixels.
+    img = _disc(size=256, r=90)
+    r = readability(img, size=(44, 52))
+    assert r["pale"] == 0                  # the disc is mid-toned
+    assert 0.0 < r["coverage"] < 1.0
+
+
+def test_silhouette_keeps_the_shape_and_drops_the_colour():
+    s = np.asarray(silhouette(_disc()))
+    assert tuple(s[32, 32, :3]) == (0, 0, 0)
+    assert s[32, 32, 3] == 255
+    assert s[0, 0, 3] == 0
+
+
+def test_qc_strip_writes_a_sheet():
+    import tempfile
+    from pathlib import Path
+    out = Path(tempfile.mkdtemp()) / "qc.png"
+    qc_strip(_disc(), [(44, 52), (88, 104)], out, bg=(56, 54, 92, 255))
+    assert out.exists()
+    assert Image.open(out).width > 44
