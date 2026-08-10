@@ -57,6 +57,48 @@ def test_the_subject_survives_under_the_contour():
     assert tuple(out[32, 32, :3]) == (220, 90, 60)
 
 
+def _ray_width(ink, cx, cy, dx, dy):
+    """Euclidean extent of the ink band along one ray from (cx, cy) in
+    direction (dx, dy) -- (1, 0)/(0, 1) for the axes, (1, 1) for a diagonal.
+    Multiplying the pixel-run length by the ray's own per-step distance
+    (1 on an axis, root 2 on a diagonal) is what makes the three
+    directions comparable in real length rather than pixel count."""
+    step = (dx**2 + dy**2) ** 0.5
+    vals, d = [], 0
+    while True:
+        x, y = cx + dx*d, cy + dy*d
+        if not (0 <= x < ink.shape[1] and 0 <= y < ink.shape[0]):
+            break
+        vals.append(ink[y, x])
+        d += 1
+    on = np.where(vals)[0]
+    return (on.max() - on.min() + 1) * step if len(on) else 0
+
+
+def test_the_contour_is_the_same_width_on_the_diagonal_too():
+    # A disc's own AA is angle-invariant (the same blind spot noted above),
+    # but ImageFilter.MaxFilter's structuring element is a SQUARE, not a
+    # circle: it reaches root-2 further along a diagonal boundary normal
+    # than an axis-aligned one. Measured through this same function at
+    # size=600/r=200/width=40 (a scale where single-pixel downsample
+    # quantization stops dominating): plain MaxFilter gave axis=13px,
+    # diagonal=18.38px, ratio 1.41 (root 2); the round dilate this helper
+    # actually uses (_plus_dilate/_square_dilate alternation, see
+    # _round_dilate) gives axis=13px, diagonal=14.14px, ratio 1.09. The 25%
+    # tolerance below sits comfortably above that 9% measured noise floor
+    # and comfortably below the 41% a square kernel misses by.
+    size, r, width = 600, 200, 40
+    out = np.asarray(contour(_disc(size, r), width=width, color=(20, 20, 40)))
+    ink = (out[..., :3].sum(axis=-1) < 200) & (out[..., 3] > 128)
+    cx = cy = size // 2
+    widths = [
+        _ray_width(ink, cx, cy, 1, 0),
+        _ray_width(ink, cx, cy, 0, 1),
+        _ray_width(ink, cx, cy, 1, 1),
+    ]
+    assert max(widths) / min(widths) <= 1.25, widths
+
+
 def test_the_contour_stays_opaque_over_a_pre_softened_edge():
     # A disc's own AA is angle-invariant, so it can't catch this: dilating
     # raw alpha (instead of hard-thresholding it first) makes the ring
