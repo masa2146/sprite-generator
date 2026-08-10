@@ -162,15 +162,18 @@ python3 .claude/skills/sprite-brief/scripts/cut.py <downloads> --out-dir sprites
 
 Every prompt asks for `isolated on flat solid #808080 neutral grey
 background` rather than transparency, because hosted image models do not
-reliably emit an alpha channel. Measured on a synthetic sprite across four
-subject colours (teal, white, grey, gold), a `#FF00FF` backdrop left
-610–2079 tinted edge pixels every time — a visible coloured rim — while
-`#808080` left zero. A saturated backdrop bleeds into the edge the model
-itself draws, before any local cutting ever runs, which is why the colour
-stayed a neutral grey instead of becoming an easy-to-key colour like
-magenta. `cut.py --key` is what removes it locally: it floods the background
-colour in from the border only, so a dark seam inside an object survives
-rather than being punched out with it.
+reliably emit an alpha channel. The choice of grey over an easy-to-key
+colour like magenta is a measurement from when this pipeline cut backdrops
+with an alpha-matting model: matting returns edge pixels as a blend of
+subject and backdrop, so a saturated backdrop bleeds colour into that blend.
+Measured on a synthetic sprite across four subject colours (teal, white,
+grey, gold), a `#FF00FF` backdrop left 610–2079 tinted edge pixels every
+time; `#808080` left zero. That matting model is gone — `cut.py --key`
+floods the backdrop colour in from the border instead — and grey has not
+been re-measured against it. It stayed the default because a border flood
+still needs a backdrop colour no subject is likely to share, which is
+reasoning carried forward from the original test, not a new measurement of
+the current cutter.
 
 ## Tests
 

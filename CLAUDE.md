@@ -93,12 +93,16 @@ one script per asset), `out/`, `qc/`.
   `brief.py`, `cut.py` — are the exception: they ship with the skill, not
   with a generated set, and run under plain `python3`. The venv is
   specifically for `style.py` and the per-asset scripts a job accumulates.
-- **The flat `#808080` backdrop is a measured decision.** Across four subject
-  colours, a `#FF00FF` backdrop left 610–2079 tinted edge pixels; `#808080`
-  left zero — a saturated backdrop bleeds into the edge the model itself
-  draws, before any local cutting runs. `cut.py --key` is what removes it,
-  flooding the backdrop colour in from the border so a dark seam inside an
-  object survives rather than being punched out with it.
+- **The flat `#808080` backdrop is a measured decision, from a cutter this
+  pipeline no longer uses.** Cut with an alpha-matting model, a `#FF00FF`
+  backdrop left 610–2079 tinted edge pixels across four subject colours while
+  `#808080` left zero — matting blends subject and backdrop at the cut edge,
+  and a saturated backdrop bled visible colour into that blend. That model is
+  gone; `cut.py --key` floods the backdrop colour in from the border instead,
+  and grey has never been re-measured against it. It stayed the default
+  because a border flood still needs an unambiguous backdrop colour — the
+  same reasoning the original test was measuring, not a new measurement of
+  today's cutter.
 
 ## Tests
 

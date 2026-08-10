@@ -11,13 +11,17 @@ from __future__ import annotations
 
 # Hosted models do not emit reliable alpha, so we ask for a flat backdrop we can
 # cut locally. Edge quality comes from this clause, not from the model.
-# Neutral grey, not a chroma-key colour. The local cutout step does alpha
-# matting, not chroma keying: edge pixels come out as a blend of subject and
-# backdrop, so a saturated backdrop bleeds visible colour into the cutout's
-# edge. Measured on a synthetic sprite across four subject colours: #FF00FF
-# left 610-2079 tinted edge pixels every time, #808080 left zero, with
-# segmentation quality unchanged (matting keys on salience, not colour
-# contrast).
+# Neutral grey, not a chroma-key colour. This is a measurement from when this
+# pipeline cut backdrops with an alpha-matting model, not the flood-fill
+# cutter in cut.py today: matting returned edge pixels as a blend of subject
+# and backdrop, so a saturated backdrop bled visible colour into that blend.
+# Measured on a synthetic sprite across four subject colours: #FF00FF left
+# 610-2079 tinted edge pixels every time, #808080 left zero, with
+# segmentation quality unchanged (matting keyed on salience, not colour
+# contrast). That matting model is gone, and grey was never re-measured
+# against the border flood-fill that replaced it -- it stayed the default
+# because a flood-fill still needs an unambiguous backdrop colour, the same
+# reason the original test was measuring.
 BG_CLAUSE = ("isolated on flat solid #808080 neutral grey background, no shadow, "
              "no ground plane, no gradient, no scene, no props")
 

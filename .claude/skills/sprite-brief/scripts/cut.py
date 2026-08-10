@@ -17,11 +17,12 @@ def key_background(data: bytes, tol: float = 14.0) -> Image.Image:
     """Clear every pixel reachable from the border whose colour is within `tol`
     of the background's.
 
-    For an asset sheet laid out on one flat colour this beats a matting model
-    outright: the model reads a near-black plate or a low-contrast panel as
-    background and eats it, while a keyed flood only ever removes the colour it
-    was told to. Connectivity is what keeps a dark seam inside an object from
-    being punched out along with the background around it.
+    For an asset sheet laid out on one flat colour this is why key-based
+    cutting replaced the matting model this pipeline used to cut with: matting
+    read a near-black plate or a low-contrast panel as background and ate it,
+    while a keyed flood only ever removes the colour it is told to.
+    Connectivity is what keeps a dark seam inside an object from being punched
+    out along with the background around it.
     """
     img = Image.open(BytesIO(data)).convert("RGB")
     rgb = np.asarray(img).astype(np.int16)
@@ -52,10 +53,11 @@ def cut_glow(data: bytes) -> Image.Image:
     """Alpha straight from brightness above the flat background colour.
 
     For a soft additive effect — a flash, a glow — there is no subject edge to
-    find, and a matting model shreds it into blobs. Reading the alpha off the
-    luminance keeps the falloff intact. Assumes a flat background, taken as the
-    most common colour rather than a corner pixel — a corner lands on a grid
-    line often enough to drag the whole threshold down with it.
+    find, and the matting model this pipeline used to cut with shredded that
+    into blobs. Reading the alpha off the luminance keeps the falloff intact.
+    Assumes a flat background, taken as the most common colour rather than a
+    corner pixel — a corner lands on a grid line often enough to drag the
+    whole threshold down with it.
     """
     img = Image.open(BytesIO(data)).convert("RGB")
     grey = img.convert("L")
