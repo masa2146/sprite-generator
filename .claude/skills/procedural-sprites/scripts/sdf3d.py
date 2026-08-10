@@ -292,9 +292,17 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
         # result is a flat patch with an anti-aliased boundary rather than a
         # falloff. The lit term multiplies INSIDE the base — an unlit point
         # raises zero to a large power, so the highlight is absent in shadow
-        # rather than merely dim. The 0.01 width is an anti-aliasing epsilon,
-        # not a softness knob.
-        lit = np.clip(lam, 0, 1)
+        # rather than merely dim. It has to be BINARISED first (0 or 1, not
+        # raw N.L): a continuous 0.9 raised to a hundreds-to-thousands power
+        # is ~0 too, which would kill the highlight on the lit side as well
+        # as the shadowed one — measured as `hot` never exceeding ~1e-40
+        # anywhere except when the light points almost exactly along the
+        # view vector. Roystan's toon-shader source does the same
+        # `smoothstep(0, 0.01, NdotL)` binarisation before folding the gate
+        # into the base, for this exact reason. The 0.01 width (here and in
+        # the threshold below) is an anti-aliasing epsilon, not a softness
+        # knob.
+        lit = np.clip(lam / 0.01, 0, 1)
         hot = (ndh * lit) ** np.maximum(shin_a * shin_a, 1.0)
         edge = np.clip((hot - hard_a) / 0.01, 0, 1)
         sp = np.where(np.isnan(hard_a), soft_sp, edge)
