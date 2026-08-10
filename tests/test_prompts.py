@@ -95,6 +95,12 @@ def test_asset_prompt_names_one_picture_when_there_is_no_style_image():
     assert "Picture 2" not in text
 
 
+def test_a_text_only_object_gets_no_references_block():
+    text = prompts.asset_prompt({"id": "a", "subject": "x"}, "front", STYLE,
+                                references=False)
+    assert "REFERENCES" not in text and "Picture 1" not in text
+
+
 def test_a_contained_object_becomes_a_do_not_draw_line():
     obj = {"id": "tray", "subject": "a tray"}
     text = prompts.asset_prompt(obj, "front", STYLE, contents=["puck"])

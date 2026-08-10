@@ -231,6 +231,13 @@ img { max-width: 190px; max-height: 190px; background: #22222c; border-radius: 6
 pre { margin: 0; padding: .85rem; background: #1e1e28; border-radius: 6px;
       white-space: pre-wrap; word-break: break-word;
       font: 13px/1.5 ui-monospace, monospace; }
+.style-grid { display: grid; grid-template-columns: max-content 1fr;
+              gap: .4rem 1rem; margin-bottom: 2rem; align-items: center; }
+.src { color: #9a9ab0; font-size: .72rem; margin-left: .5rem; border: 1px solid #33334a;
+       border-radius: 3px; padding: 0 .35rem; }
+.swatch { display: inline-block; width: 24px; height: 24px; border-radius: 4px;
+          vertical-align: middle; margin-right: .3rem; }
+.prompts { margin-top: 2.5rem; border-top: 2px solid #2c2c3a; padding-top: 1.5rem; }
 """
 
 
@@ -240,45 +247,75 @@ def _data_uri(path: Path) -> str:
     return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode()
 
 
-def page(entries, style_image: Path, title: str) -> str:
-    """The whole brief as one self-contained HTML document.
+def _swatches(colours) -> str:
+    """Measured colours as squares plus their hex, because a name is not
+    reproducible: a conveyor's channel was called 'pale lilac-white' when it is
+    #434375, and the sprite stayed pale until the measured value went into the prompt."""
+    return "".join(
+        f"<span class='swatch' style='background:{html.escape(c)}'></span>"
+        f"<code>{html.escape(c)}</code>"
+        for c in colours or [])
 
-    Both images are inlined and both are named, because the workflow is: read
-    the prompt here, then upload those two files from refs/.
+
+def page(analysis, kept, contents, title: str) -> str:
+    """The whole review as one self-contained document.
+
+    Two sections, because the same analysis feeds two ways of making the
+    sprite: the review is what gets checked before any code is written, and
+    the prompts are what gets pasted into a chat when it is made by hand.
     """
-    style_image = Path(style_image)
-    style_uri = _data_uri(style_image)
     out = [
         "<!doctype html><html><head><meta charset='utf-8'>",
         f"<title>{html.escape(title)}</title><style>{_CSS}</style></head><body>",
         f"<h1>{html.escape(title)}</h1>",
-        f"<p class='meta'>{len(entries)} prompts · upload BOTH images with every "
-        "message · one message per sprite</p>",
+        f"<p class='meta'>{len(kept)} nesne · inceleme + elle üretim prompt'ları</p>",
+        "<h2>Stil</h2><div class='style-grid'>",
     ]
-    # The style image is drawn once, at the top. Repeating it per asset inlines
-    # the same base64 blob N times: measured at 55 MB for a 2.4 MB screenshot
-    # across 17 assets. Each asset still names it, so the "upload both" rule
-    # survives without the bytes.
-    out += [
-        "<figure class='style'>",
-        f"<img src='{style_uri}' alt=''>",
-        f"<figcaption>Picture 2 — {html.escape(style_image.name)} — upload this "
-        "with EVERY message, alongside the crop</figcaption>",
-        "</figure>",
-    ]
-    for entry in entries:
-        crop = Path(entry["crop"])
-        out += [
-            "<div class='asset'>",
-            f"<h2>{html.escape(entry['id'])}</h2>",
-            "<div class='row'>",
-            f"<figure><img src='{_data_uri(crop)}' alt=''>"
-            f"<figcaption>Picture 1 — {html.escape(crop.name)}</figcaption></figure>",
-            f"<p class='pair'>+ Picture 2 — {html.escape(style_image.name)}</p>",
-            "</div>",
-            f"<pre>{html.escape(entry['prompt'])}</pre>",
-            "</div>",
-        ]
+    for field in STYLE_FIELDS:
+        out.append(
+            f"<div><code>{field}</code></div>"
+            f"<div>{html.escape(analysis.style[field])}"
+            f"<span class='src'>{html.escape(analysis.style_source[field])}</span></div>")
+    out.append("</div>")
+    if analysis.style_image:
+        out += ["<figure class='style'>",
+                f"<img src='{_data_uri(analysis.style_image)}' alt=''>",
+                f"<figcaption>Picture 2 — {html.escape(analysis.style_image.name)} — "
+                "her mesajda crop'un yanında bunu da yükle</figcaption>", "</figure>"]
+
+    out.append("<h2>Nesneler</h2>")
+    for obj in kept:
+        crop = obj.get("crop")
+        out += ["<div class='asset'>", f"<h3>{html.escape(obj['id'])}</h3>",
+                "<div class='row'>"]
+        if crop:
+            out.append(f"<figure><img src='{_data_uri(Path(crop))}' alt=''>"
+                       f"<figcaption>Picture 1 — {html.escape(Path(crop).name)}"
+                       "</figcaption></figure>")
+        else:
+            out.append("<p class='pair'>görsel yok — yalnızca tarif</p>")
+        out.append(f"<div><p>{_swatches(obj.get('palette'))}</p>")
+        for key, label in (("subject", "OBJECT"), ("form", "FORM"),
+                           ("detail", "DETAIL"), ("state", "STATE")):
+            if isinstance(obj.get(key), str) and obj[key].strip():
+                out.append(f"<p><code>{label}</code> {html.escape(obj[key])}</p>")
+        out.append("<p><code>VIEWS</code> {}</p></div>".format(
+            html.escape(", ".join(obj["views"]))))
+        out.append("</div></div>")
+
+    out.append("<h2 class='prompts'>Elle üretim prompt'ları</h2>"
+               "<p class='meta'>Her mesajda iki görseli de yükle · sprite başına tek "
+               "mesaj · set başına yeni sohbet · indirileni <code>cut.py</code> ile kes</p>")
+    for obj in kept:
+        has_crop = obj.get("crop") is not None
+        for view in obj["views"]:
+            text = prompts.asset_prompt(
+                obj, view, analysis.style, contents.get(obj["id"]),
+                style_image=has_crop and analysis.style_image is not None,
+                references=has_crop)
+            out += ["<div class='asset'>",
+                    f"<h3>{html.escape(obj['id'])}-{html.escape(view)}</h3>",
+                    f"<pre>{html.escape(text)}</pre>", "</div>"]
     out.append("</body></html>")
     return "\n".join(out)
 
@@ -301,17 +338,17 @@ def main(argv=None) -> int:
     analysis_path = Path(args.analysis)
     out_dir = Path(args.out_dir)
     refs_dir = out_dir / "refs"
-    brief_path = out_dir / "brief.html"
+    review_path = out_dir / "review.html"
     inner_analysis = out_dir / "analysis.json"
 
     # Refuse to clobber a brief the user has already reviewed — unless the
     # analysis being read IS this brief's own, which is the review loop:
     # edit analysis.json in place, run again.
-    if brief_path.exists():
+    if review_path.exists():
         same = (analysis_path.resolve() == inner_analysis.resolve()
                 if inner_analysis.exists() else False)
         if not same:
-            print(f"error: {brief_path} already exists — delete it, choose another "
+            print(f"error: {review_path} already exists — delete it, choose another "
                   f"--out-dir, or edit {inner_analysis} and re-run from that file",
                   file=sys.stderr)
             return 1
@@ -361,29 +398,14 @@ def main(argv=None) -> int:
             # A review aid must not cost the user the crops and prompts.
             print(f"warning: contact sheet not written: {exc}", file=sys.stderr)
 
-    # page() shows a shared "Picture 2" style reference at the top of every
-    # entry; without one there is nothing for that figure to hold, so building
-    # the page needs the same style_image the copy above needed. Splitting the
-    # page into a pictured section and a text-only one that does not need it
-    # is task 9's job.
-    if style_copy is None:
-        print("error: no 'style_image' — cannot build brief.html, which shows "
-              "it as Picture 2 on every entry; crops are still written to "
-              f"{refs_dir}", file=sys.stderr)
-        return 1
-
-    entries = []
-    for obj in pictured:
-        for view in obj["views"]:
-            entries.append({
-                "id": "{}-{}".format(obj["id"], view),
-                "crop": obj["crop"],
-                "prompt": prompts.asset_prompt(obj, view, parsed.style, contents.get(obj["id"])),
-            })
-
-    title = f"{out_dir.name} — prompts for manual generation"
+    # page() renders the style figure only when analysis.style_image is set,
+    # so an analysis with no style image (every object cropped or copied from
+    # its own source) no longer fails here — it used to, after the crops were
+    # already written, because the old single-section page() had nowhere to
+    # put a "Picture 2" it did not have.
+    title = f"{out_dir.name} — inceleme + elle üretim prompt'ları"
     try:
-        brief_path.write_text(page(entries, style_copy, title), encoding="utf-8")
+        review_path.write_text(page(parsed, kept, contents, title), encoding="utf-8")
         if analysis_path.resolve() != inner_analysis.resolve():
             # A straight copy would keep whatever image path the user wrote
             # (often relative, resolved against analysis_path's own
@@ -393,7 +415,7 @@ def main(argv=None) -> int:
             # keeps the review loop ("edit analysis.json in place, run
             # again") working from out_dir.
             raw = json.loads(analysis_path.read_text(encoding="utf-8"))
-            raw["style_image"] = str(parsed.style_image)
+            raw["style_image"] = str(parsed.style_image) if parsed.style_image else None
             # Per-object source needs the same stamping, and for the same
             # reason: task 7 could leave it alone because nothing cropped from
             # it yet, but prepare_refs does now, so a rerun of this copy from
@@ -405,10 +427,11 @@ def main(argv=None) -> int:
                     raw_obj["source"] = str(source)
             inner_analysis.write_text(json.dumps(raw), encoding="utf-8")
     except OSError as exc:
-        print(f"error: cannot write {brief_path}: {exc}", file=sys.stderr)
+        print(f"error: cannot write {review_path}: {exc}", file=sys.stderr)
         return 1
 
-    print(f"\n{len(kept)} objects, {len(entries)} prompts -> {brief_path}")
+    total_prompts = sum(len(obj["views"]) for obj in kept)
+    print(f"\n{len(kept)} objects, {total_prompts} prompts -> {review_path}")
     print(f"uploads -> {refs_dir}")
     if sheet and not args.no_open:
         webbrowser.open(Path(sheet).resolve().as_uri())

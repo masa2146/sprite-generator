@@ -261,17 +261,23 @@ def style_line(style: dict) -> str:
 
 
 def asset_prompt(obj: dict, view: str, style: dict, contents=None,
-                 style_image: bool = True) -> str:
+                 style_image: bool = True, references: bool = True) -> str:
     """One paste-ready prompt for this object in this view.
 
     Structured blocks rather than a paragraph: in the run-on form the clauses a
     model skips were the ones buried mid-sentence, and the measured failures
     were twelve balls instead of one and HUD labels that kept their text.
+
+    `references` is False for a text-only object — one with no crop at all.
+    The REFERENCES block's whole point is naming a Picture 1 to take identity
+    from; printing it anyway would send the model looking for an upload that
+    never happens.
     """
-    return "\n\n".join([
-        references_block(style_image),
+    blocks = [references_block(style_image)] if references else []
+    blocks += [
         field_block(obj, view),
         f"ART STYLE  {style_line(style)}",
         output_block(obj["id"].replace("_", " "), square=True),
         do_not_draw(exclusion_clause(contents) if contents else ""),
-    ])
+    ]
+    return "\n\n".join(blocks)

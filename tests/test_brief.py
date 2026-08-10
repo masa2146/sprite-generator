@@ -1,6 +1,7 @@
 """sprite brief tests. Run: python3 -m pytest tests/test_brief.py"""
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -392,73 +393,86 @@ def test_duplicate_ids_differing_only_in_case_are_rejected_across_sources():
     assert rejected == [("dup", "duplicate id")]
 
 
-# --- the HTML brief ---------------------------------------------------------
+# --- the HTML review page ----------------------------------------------------
 
-def _png(path, size=(20, 20), colour=(200, 30, 30)):
-    from PIL import Image
-    Image.new("RGB", size, colour).save(path)
-    return Path(path)
-
-
-def test_the_page_inlines_both_images():
-    """The file has to survive being moved or mailed; refs/ does not travel
-    with it."""
-    with tempfile.TemporaryDirectory() as tmp:
-        crop = _png(Path(tmp) / "alpha.png")
-        style = _png(Path(tmp) / "_style.png", size=(40, 40))
-        html_text = brief.page(
-            [{"id": "alpha-front", "crop": crop, "prompt": "P"}], style, "t")
-    assert html_text.count("data:image/png;base64,") == 2
-    assert "alpha.png" in html_text          # named so the upload is findable
-    assert "_style.png" in html_text
+def _rendered(objects, style_image="shot.png", images=("shot.png",)):
+    d = Path(tempfile.mkdtemp())
+    for name in images:
+        Image.new("RGB", (200, 200), (90, 90, 120)).save(d / name)
+    payload = {"style": FULL_STYLE, "style_source": {"render": "kullanıcı"},
+               "objects": objects}
+    if style_image:
+        payload["style_image"] = style_image
+    path = d / "analysis.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    parsed = brief.load_analysis(path)
+    kept, _, contents = brief.prepare_refs(parsed, d / "refs")
+    return brief.page(parsed, kept, contents, "t")
 
 
-def test_the_style_image_is_inlined_once_no_matter_how_many_assets():
-    """Inlining it per asset produced a 55 MB file for a 2.4 MB screenshot
-    across 17 assets. Each asset still names the file, so the rule that both
-    images go with every message survives without the bytes."""
-    with tempfile.TemporaryDirectory() as tmp:
-        crop = _png(Path(tmp) / "alpha.png")
-        style = _png(Path(tmp) / "_style.png", size=(40, 40))
-        entries = [{"id": f"alpha-{i}", "crop": crop, "prompt": "P"} for i in range(4)]
-        html_text = brief.page(entries, style, "t")
-    assert html_text.count("data:image/png;base64,") == len(entries) + 1
-    assert html_text.count("_style.png") == len(entries) + 1   # named per asset
+def test_the_review_section_prints_every_style_field_with_its_source():
+    html = _rendered([{"id": "a", "subject": "x", "bbox": [10, 10, 90, 90]}])
+    for field in brief.STYLE_FIELDS:
+        assert field in html
+    assert "kullanıcı" in html
+    assert "belirtilmemiş" in html          # the fields nobody claimed
 
 
-def test_each_asset_gets_its_own_section_and_prompt():
-    with tempfile.TemporaryDirectory() as tmp:
-        crop = _png(Path(tmp) / "alpha.png")
-        style = _png(Path(tmp) / "_style.png")
-        entries = [{"id": "alpha-front", "crop": crop, "prompt": "PROMPT ONE"},
-                   {"id": "alpha-side", "crop": crop, "prompt": "PROMPT TWO"}]
-        html_text = brief.page(entries, style, "t")
-    assert html_text.count("class='asset'") == 2
-    assert "PROMPT ONE" in html_text and "PROMPT TWO" in html_text
-    assert "alpha-front" in html_text and "alpha-side" in html_text
+def test_the_review_section_shows_the_measured_palette_as_swatches():
+    html = _rendered([{"id": "a", "subject": "x", "bbox": [10, 10, 90, 90]}])
+    swatches = re.findall(r"class='swatch' style='background:(#[0-9A-Fa-f]{6})'", html)
+    assert swatches, "no measured colour reached the page"
+    # the crop is one flat colour, so its dominant swatch is that colour
+    rgb = tuple(int(swatches[0][i:i + 2], 16) for i in (1, 3, 5))
+    assert all(abs(a - b) <= 12 for a, b in zip(rgb, (90, 90, 120))), swatches[0]
+    assert f"<code>{swatches[0]}</code>" in html
 
 
-def test_the_page_escapes_prompt_text_and_ids():
-    with tempfile.TemporaryDirectory() as tmp:
-        crop = _png(Path(tmp) / "alpha.png")
-        style = _png(Path(tmp) / "_style.png")
-        html_text = brief.page(
-            [{"id": "a<b>", "crop": crop, "prompt": "draw a <script> & thing"}],
-            style, "t<i>")
-    assert "<script>" not in html_text
-    assert "&lt;script&gt;" in html_text
-    assert "a&lt;b&gt;" in html_text
+def test_the_prompt_section_carries_a_paste_ready_block_per_view():
+    html = _rendered([{"id": "a", "subject": "x", "bbox": [10, 10, 90, 90],
+                       "views": ["front", "side"]}])
+    assert html.count("DO NOT DRAW") == 2
+    assert "a-front" in html and "a-side" in html
+
+
+def test_the_prompt_names_both_pictures_when_a_style_image_exists():
+    html = _rendered([{"id": "a", "subject": "x", "bbox": [10, 10, 90, 90]}])
+    assert "Picture 1" in html and "Picture 2" in html
+
+
+def test_the_prompt_names_one_picture_when_there_is_no_style_image():
+    html = _rendered([{"id": "a", "subject": "x", "source": "shot.png",
+                       "bbox": [10, 10, 90, 90]}], style_image=None)
+    assert "Picture 2" not in html
+
+
+def test_a_text_only_object_still_gets_a_prompt_and_says_it_has_no_picture():
+    html = _rendered([{"id": "idea", "subject": "a described thing"}],
+                     style_image=None, images=())
+    assert "idea-front" in html
+    assert "görsel yok" in html
+    assert "Picture 1" not in html
+
+
+def test_the_style_image_is_inlined_once_no_matter_how_many_objects():
+    html = _rendered([{"id": "a", "subject": "x", "bbox": [10, 10, 90, 90]},
+                      {"id": "b", "subject": "y", "bbox": [100, 100, 190, 190]}])
+    # Measured: repeating the same base64 blob per asset produced a 55 MB page
+    # from a 2.4 MB screenshot across 17 assets.
+    assert html.count("data:image/png;base64,") == 3   # style + two crops
+
+
+def test_the_page_escapes_ids_and_prompt_text():
+    html = _rendered([{"id": "a", "subject": "<script>alert(1)</script>",
+                       "bbox": [10, 10, 90, 90]}])
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html
 
 
 def test_the_page_references_no_external_file():
-    with tempfile.TemporaryDirectory() as tmp:
-        crop = _png(Path(tmp) / "alpha.png")
-        style = _png(Path(tmp) / "_style.png")
-        html_text = brief.page(
-            [{"id": "alpha-front", "crop": crop, "prompt": "P"}], style, "t")
-    assert "http://" not in html_text and "https://" not in html_text
-    assert "<link" not in html_text and "<script" not in html_text
-    assert "url(" not in html_text and "@import" not in html_text
+    html = _rendered([{"id": "a", "subject": "x", "bbox": [10, 10, 90, 90]}])
+    assert "http://" not in html and "https://" not in html
+    assert 'src="refs/' not in html
 
 
 # --- the command ------------------------------------------------------------
@@ -478,26 +492,32 @@ def _run(tmp, data=None, out_name="b", extra=None):
     return brief.main(argv + (extra or [])), out_dir, scene
 
 
-def test_a_run_writes_crops_the_style_copy_the_sheet_and_the_brief():
-    with tempfile.TemporaryDirectory() as tmp:
-        code, out_dir, scene = _run(tmp)
-        assert code == 0
-        assert (out_dir / "brief.html").exists()
-        assert (out_dir / "analysis.json").exists()
-        assert (out_dir / "refs" / "alpha.png").exists()
-        assert (out_dir / "refs" / "_contact_sheet.png").exists()
-        style_copy = out_dir / "refs" / "_style.png"
-        assert style_copy.exists()
-        assert style_copy.read_bytes() == scene.read_bytes()
+def test_main_writes_review_html_and_the_inner_analysis():
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (200, 200), (90, 90, 120)).save(d / "shot.png")
+    src = d / "analysis.json"
+    src.write_text(json.dumps({
+        "style": FULL_STYLE, "style_image": "shot.png",
+        "objects": [{"id": "a", "subject": "x", "bbox": [10, 10, 90, 90]}],
+    }), encoding="utf-8")
+    out = d / "brief"
+    assert brief.main(["--analysis", str(src), "--out-dir", str(out),
+                       "--no-open"]) == 0
+    assert (out / "review.html").exists()
+    assert (out / "analysis.json").exists()
+    assert (out / "refs" / "a.png").exists()
+    assert (out / "refs" / "_style.png").exists()
 
 
 def test_two_views_produce_two_prompts_over_one_crop():
     """Same crop, different VIEW line — the semantics extract already uses."""
     with tempfile.TemporaryDirectory() as tmp:
         code, out_dir, _scene_path = _run(tmp)
-        body = (out_dir / "brief.html").read_text()
+        body = (out_dir / "review.html").read_text()
         assert code == 0
-        assert body.count("class='asset'") == 2
+        # one prompt block per view, each ending in its own DO NOT DRAW —
+        # distinct from the single review-section '.asset' the object itself gets
+        assert body.count("DO NOT DRAW") == 2
         assert "alpha-front" in body and "alpha-side" in body
         assert len(list((out_dir / "refs").glob("alpha*.png"))) == 1
 
@@ -511,7 +531,7 @@ def test_a_contained_object_reaches_the_do_not_draw_list():
     ])
     with tempfile.TemporaryDirectory() as tmp:
         code, out_dir, _s = _run(tmp, data)
-        body = (out_dir / "brief.html").read_text()
+        body = (out_dir / "review.html").read_text()
     assert code == 0
     assert "visible inside it in the reference image" in body
     assert "brick" in body
@@ -526,7 +546,7 @@ def test_a_rejected_box_is_reported_and_the_rest_survive():
     ])
     with tempfile.TemporaryDirectory() as tmp:
         code, out_dir, _s = _run(tmp, data)
-        body = (out_dir / "brief.html").read_text()
+        body = (out_dir / "review.html").read_text()
         assert code == 0
         assert "alpha-front" in body
         assert "whole-front" not in body
@@ -541,7 +561,7 @@ def test_no_usable_object_writes_nothing():
     with tempfile.TemporaryDirectory() as tmp:
         code, out_dir, _s = _run(tmp, data)
         assert code == 1
-        assert not (out_dir / "brief.html").exists()
+        assert not (out_dir / "review.html").exists()
 
 
 def test_an_existing_brief_is_not_overwritten_from_an_outside_analysis():
@@ -551,10 +571,10 @@ def test_an_existing_brief_is_not_overwritten_from_an_outside_analysis():
         code, out_dir, _s = _run(tmp)
         assert code == 0
         marker = "<!-- mine -->"
-        (out_dir / "brief.html").write_text(marker, encoding="utf-8")
+        (out_dir / "review.html").write_text(marker, encoding="utf-8")
         code2, _o, _s2 = _run(tmp)
         assert code2 == 1
-        assert (out_dir / "brief.html").read_text() == marker
+        assert (out_dir / "review.html").read_text() == marker
 
 
 def test_rerunning_from_the_briefs_own_analysis_is_allowed():
@@ -568,7 +588,7 @@ def test_rerunning_from_the_briefs_own_analysis_is_allowed():
         inner.write_text(json.dumps(data), encoding="utf-8")
         code2 = brief.main(["--analysis", str(inner), "--out-dir", str(out_dir)])
         assert code2 == 0
-        assert "a SECOND PASS rabbit" in (out_dir / "brief.html").read_text()
+        assert "a SECOND PASS rabbit" in (out_dir / "review.html").read_text()
 
 
 def test_the_review_copy_stamps_per_object_source_too():
@@ -617,7 +637,7 @@ def test_a_bad_analysis_writes_nothing_and_exits_one():
     with tempfile.TemporaryDirectory() as tmp:
         code, out_dir, _s = _run(tmp, data)
         assert code == 1
-        assert not (out_dir / "brief.html").exists()
+        assert not (out_dir / "review.html").exists()
 
 
 def test_an_unreadable_image_exits_one():
@@ -630,4 +650,23 @@ def test_an_unreadable_image_exits_one():
         code = brief.main(["--analysis", str(analysis),
                            "--out-dir", str(Path(tmp) / "b")])
     assert code == 1
+
+
+def test_main_writes_review_html_end_to_end_with_no_style_image():
+    """Carried forward from task 8's review: main() used to fail late — after
+    the crops were already written — because the old single-section page()
+    had nowhere to put a "Picture 2" it did not have. It must now succeed."""
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (150, 100), (10, 200, 10)).save(d / "obj.png")
+    data = _analysis(objects=[{"id": "alpha", "subject": "a thing", "source": "obj.png"}])
+    del data["style_image"]
+    analysis_path = d / "analysis.json"
+    analysis_path.write_text(json.dumps(data), encoding="utf-8")
+    out_dir = d / "b"
+
+    code = brief.main(["--analysis", str(analysis_path), "--out-dir", str(out_dir)])
+    assert code == 0
+    body = (out_dir / "review.html").read_text()
+    assert "Picture 2" not in body
+    assert not (out_dir / "refs" / "_style.png").exists()
 
