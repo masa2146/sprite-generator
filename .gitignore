@@ -6,3 +6,6 @@ __pycache__/
 .gstack/
 .DS_Store
 .pytest_cache/
+briefs
+# Holds real key values, never committed. Do not remove this line.
+.env
