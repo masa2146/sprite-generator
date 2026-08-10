@@ -53,14 +53,29 @@ def test_a_hand_generated_png_on_flat_grey_comes_back_with_alpha():
     d = Path(tempfile.mkdtemp())
     downloads, sprites = d / "downloads", d / "out"
     downloads.mkdir()
-    img = Image.new("RGB", (128, 128), (128, 128, 128))
-    for x in range(40, 90):
-        for y in range(40, 90):
+    SIZE, SUBJECT = 128, 50           # frame, and the painted square inside it
+    img = Image.new("RGB", (SIZE, SIZE), (128, 128, 128))
+    for x in range(40, 40 + SUBJECT):
+        for y in range(40, 40 + SUBJECT):
             img.putpixel((x, y), (200, 70, 40))
-    img.save(downloads / "block.png")
+    src = downloads / "block.png"
+    img.save(src)
 
     assert cut.main([str(downloads), "--out-dir", str(sprites)]) == 0
     with Image.open(sprites / "block.png") as done:
         assert done.mode == "RGBA"
         assert done.getpixel((0, 0))[3] == 0
         assert done.width == done.height
+        # A working key trims to roughly the subject plus a small margin
+        # (~54px here). Keying that removed nothing pads the whole untouched
+        # SIZE x SIZE frame instead, which comes out *larger* than SIZE
+        # (~140px). SUBJECT * 2 sits well below that and above the true size,
+        # so only a real cut can pass this.
+        assert done.width < SUBJECT * 2
+
+    # The size bound alone only proves something was cropped; pin the keying
+    # itself too: a pixel that was backdrop in the original frame must come
+    # back transparent, and a pixel that was subject must come back opaque.
+    keyed = cut.key_background(src.read_bytes())
+    assert keyed.getpixel((10, 10))[3] == 0      # backdrop
+    assert keyed.getpixel((60, 60))[3] == 255    # inside the subject square
