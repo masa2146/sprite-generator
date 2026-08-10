@@ -1,5 +1,6 @@
 """sprite brief tests. Run: python3 -m pytest tests/test_brief.py"""
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -228,6 +229,98 @@ def test_unreadable_json_names_the_file():
             raise AssertionError("expected BriefError")
 
 
+# --- crop_mode and prepare_refs: the crop decision --------------------------
+
+def test_crop_mode_reads_the_three_cases():
+    assert brief.crop_mode({"source": Path("a.png"), "bbox": [1, 2, 3, 4]}) == "crop"
+    assert brief.crop_mode({"source": Path("a.png"), "bbox": None}) == "whole"
+    assert brief.crop_mode({"source": None, "bbox": None}) == "text"
+
+
+def test_a_whole_image_object_is_copied_not_cut():
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (120, 90), (40, 160, 90)).save(d / "one.png")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [{"id": "blob", "subject": "a blob", "source": "one.png"}],
+    }), encoding="utf-8")
+    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert not rejected
+    assert kept[0]["crop"].name == "blob.png"
+    with Image.open(kept[0]["crop"]) as done:
+        # cleaned (upscaled past the capture's stair-stepping) but not cropped:
+        # the aspect ratio of the source survives
+        assert round(done.width / done.height, 2) == round(120 / 90, 2)
+
+
+def test_a_text_only_object_gets_no_crop_and_is_not_rejected():
+    d = Path(tempfile.mkdtemp())
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [{"id": "idea", "subject": "a thing I described"}],
+    }), encoding="utf-8")
+    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert not rejected
+    assert kept[0].get("crop") is None
+    assert kept[0].get("palette") in (None, [])
+
+
+def test_boxes_are_only_compared_within_one_source_image():
+    d = Path(tempfile.mkdtemp())
+    for name in ("a.png", "b.png"):
+        Image.new("RGB", (200, 200), (70, 70, 90)).save(d / name)
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [
+            {"id": "big", "subject": "a frame", "source": "a.png",
+             "bbox": [10, 10, 190, 190]},
+            # identical box, different picture: it is NOT inside `big`
+            {"id": "other", "subject": "a thing", "source": "b.png",
+             "bbox": [20, 20, 120, 120]},
+        ],
+    }), encoding="utf-8")
+    _, _, contents = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert "big" not in contents, "boxes from two different images were compared"
+
+
+def test_a_box_inside_another_on_the_same_image_is_still_found():
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (200, 200), (70, 70, 90)).save(d / "a.png")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [
+            {"id": "tray", "subject": "a tray", "source": "a.png",
+             "bbox": [10, 10, 190, 190]},
+            {"id": "puck", "subject": "a puck", "source": "a.png",
+             "bbox": [60, 60, 120, 120]},
+        ],
+    }), encoding="utf-8")
+    _, _, contents = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert contents.get("tray") == ["puck"]
+
+
+def test_a_rejected_box_does_not_take_its_neighbours_down():
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (200, 200), (70, 70, 90)).save(d / "a.png")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [
+            {"id": "good", "subject": "ok", "source": "a.png",
+             "bbox": [10, 10, 90, 90]},
+            {"id": "tiny", "subject": "too small", "source": "a.png",
+             "bbox": [10, 10, 14, 14]},
+        ],
+    }), encoding="utf-8")
+    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert [o["id"] for o in kept] == ["good"]
+    assert rejected and rejected[0][0] == "tiny"
+
+
 # --- the HTML brief ---------------------------------------------------------
 
 def _png(path, size=(20, 20), colour=(200, 30, 30)):
@@ -405,6 +498,46 @@ def test_rerunning_from_the_briefs_own_analysis_is_allowed():
         code2 = brief.main(["--analysis", str(inner), "--out-dir", str(out_dir)])
         assert code2 == 0
         assert "a SECOND PASS rabbit" in (out_dir / "brief.html").read_text()
+
+
+def test_the_review_copy_stamps_per_object_source_too():
+    """Carried forward from task 7's review: the copy stamps style_image as an
+    absolute path so a rerun from out_dir still finds it. Task 7 could leave
+    per-object 'source' alone because nothing cropped from it yet; task 8 does,
+    so the same stamping has to apply to it too, or a rerun of the copy loses
+    any object whose source was written as a path relative to the ORIGINAL
+    analysis file (which out_dir is not)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        Image.new("RGB", (200, 200), (90, 90, 120)).save(d / "scene.png")
+        Image.new("RGB", (150, 100), (10, 200, 10)).save(d / "obj.png")
+        data = _analysis(objects=[
+            {"id": "alpha", "subject": "a thing", "source": "obj.png"},
+        ])
+        analysis_path = d / "analysis.json"
+        analysis_path.write_text(json.dumps(data), encoding="utf-8")
+        out_dir = d / "b"
+
+        code = brief.main(["--analysis", str(analysis_path), "--out-dir", str(out_dir)])
+        assert code == 0
+
+        inner = out_dir / "analysis.json"
+        stamped = json.loads(inner.read_text())
+        stamped_source = Path(stamped["objects"][0]["source"])
+        assert stamped_source.is_absolute()
+        assert stamped_source == (d / "obj.png").resolve()
+
+        # The review loop runs the copy again from wherever the user happens
+        # to be, not from the original analysis's directory — so load it from
+        # a different working directory and confirm the image is still found.
+        elsewhere = Path(tempfile.mkdtemp())
+        old_cwd = os.getcwd()
+        os.chdir(elsewhere)
+        try:
+            parsed = brief.load_analysis(inner)
+        finally:
+            os.chdir(old_cwd)
+        assert parsed.objects[0]["source"] == (d / "obj.png").resolve()
 
 
 def test_a_bad_analysis_writes_nothing_and_exits_one():

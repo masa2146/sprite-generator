@@ -132,6 +132,73 @@ def load_analysis(path) -> Analysis:
     return Analysis(style, style_source, style_image, out)
 
 
+def crop_mode(obj: dict) -> str:
+    """Which of the three shapes this object's reference takes.
+
+    Cropping is a decision, not a step: one clean picture of one object needs
+    no box, a screenshot holding a set needs one per object, and an object the
+    user only described has no picture at all. Guessing wrong in either
+    direction is expensive — a box around a whole playfield gave its track 80px
+    of a 1024px picture and came back as a picture frame every single time.
+    """
+    if obj.get("source") is None:
+        return "text"
+    return "crop" if obj.get("bbox") else "whole"
+
+
+def prepare_refs(analysis, refs_dir) -> tuple[list[dict], list, dict]:
+    """Write every object's reference image. Returns (kept, rejected, contents).
+
+    Boxes are compared for containment within one source image only: two boxes
+    in two different screenshots have no spatial relationship, and reporting one
+    as swallowing the other would blank a hole in a crop for no reason.
+    """
+    refs_dir = Path(refs_dir)
+    refs_dir.mkdir(parents=True, exist_ok=True)
+
+    kept: list[dict] = []
+    rejected: list = []
+    contents: dict = {}
+
+    boxed: dict[Path, list[dict]] = {}
+    for obj in analysis.objects:
+        mode = crop_mode(obj)
+        if mode == "text":
+            kept.append(dict(obj))
+        elif mode == "whole":
+            entry = dict(obj)
+            target = refs_dir / f"{obj['id']}.png"
+            try:
+                with Image.open(obj["source"]) as opened:
+                    opened.convert("RGB").save(target)
+            except OSError as exc:
+                rejected.append((obj["id"], f"cannot read {obj['source']}: {exc}"))
+                continue
+            entry["crop"] = target
+            kept.append(entry)
+        else:
+            boxed.setdefault(obj["source"], []).append(obj)
+
+    for source, group in boxed.items():
+        try:
+            with Image.open(source) as opened:
+                image = opened.convert("RGB")
+        except OSError as exc:
+            rejected.extend((o["id"], f"cannot read {source}: {exc}") for o in group)
+            continue
+        cut, dropped = crops.crop_objects(image, group, refs_dir)
+        rejected.extend(dropped)
+        inside = crops.find_contents(cut)
+        crops.blank_contents(cut, inside, image)
+        contents.update(inside)
+        kept.extend(cut)
+
+    # After blanking, which maps source-image boxes into crop coordinates that
+    # the upscale in here would invalidate.
+    refclean.clean_crops([o for o in kept if o.get("crop")])
+    return kept, rejected, contents
+
+
 _CSS = """
 body { font: 15px/1.55 -apple-system, Segoe UI, sans-serif; margin: 0 auto;
        max-width: 62rem; padding: 2rem 1.25rem; background: #16161c; color: #e8e8ef; }
@@ -203,13 +270,6 @@ def page(entries, style_image: Path, title: str) -> str:
 
 # --- the command --------------------------------------------------------
 
-def _load_image(image_path: Path):
-    try:
-        return Image.open(image_path).convert("RGB")
-    except Exception as exc:
-        raise BriefError(f"cannot read {image_path}: {exc}") from exc
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="brief",
@@ -243,22 +303,14 @@ def main(argv=None) -> int:
 
     try:
         parsed = load_analysis(analysis_path)
-        # The crop and the style copy below both need one whole image to work
-        # from; splitting a box's source per-object is task 8's job. Until
-        # then a brief needs a style_image the same way it used to need
-        # --image.
-        if parsed.style_image is None:
-            raise BriefError("'style_image' is required to crop and copy the "
-                             "reference screenshot")
-        image = _load_image(parsed.style_image)
     except BriefError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
     try:
-        kept, rejected = crops.crop_objects(image, parsed.objects, refs_dir)
+        kept, rejected, contents = prepare_refs(parsed, refs_dir)
     except OSError as exc:
-        print(f"error: cannot write crops to {refs_dir}: {exc}", file=sys.stderr)
+        print(f"error: cannot write refs to {refs_dir}: {exc}", file=sys.stderr)
         return 1
 
     for obj_id, reason in rejected:
@@ -268,32 +320,45 @@ def main(argv=None) -> int:
         print("error: no usable objects — nothing written", file=sys.stderr)
         return 1
 
-    contents = crops.find_contents(kept)
-    crops.blank_contents(kept, contents, image)
-    # After blanking, which maps source-image boxes into crop coordinates that
-    # the upscale here would invalidate.
-    refclean.clean_crops(kept)
     for obj_id, inside in contents.items():
         print(f"note: {obj_id}'s box also contains {len(inside)} other object(s) "
               f"({', '.join(inside)}) — they are blanked out of its crop, and its "
               f"prompt asks for it without them", file=sys.stderr)
 
-    style_copy = refs_dir / "_style.png"
-    try:
-        shutil.copyfile(parsed.style_image, style_copy)
-    except OSError as exc:
-        print(f"error: cannot write {style_copy}: {exc}", file=sys.stderr)
-        return 1
+    # Written only when the analysis actually has a shared style reference —
+    # an object cropped or copied from its own source needs no second picture.
+    style_copy = None
+    if parsed.style_image is not None:
+        style_copy = refs_dir / "_style.png"
+        try:
+            shutil.copyfile(parsed.style_image, style_copy)
+        except OSError as exc:
+            print(f"error: cannot write {style_copy}: {exc}", file=sys.stderr)
+            return 1
+
+    pictured = [obj for obj in kept if obj.get("crop")]
 
     sheet = None
-    try:
-        sheet = crops.labelled_sheet(kept, refs_dir / "_contact_sheet.png")
-    except Exception as exc:
-        # A review aid must not cost the user the crops and prompts.
-        print(f"warning: contact sheet not written: {exc}", file=sys.stderr)
+    if pictured:
+        try:
+            sheet = crops.labelled_sheet(pictured, refs_dir / "_contact_sheet.png")
+        except Exception as exc:
+            # A review aid must not cost the user the crops and prompts.
+            print(f"warning: contact sheet not written: {exc}", file=sys.stderr)
+
+    # page() shows a shared "Picture 2" style reference at the top of every
+    # entry; without one there is nothing for that figure to hold, so building
+    # the page needs the same style_image the copy above needed. Splitting the
+    # page into a pictured section and a text-only one that does not need it
+    # is task 9's job.
+    if style_copy is None:
+        print("error: no 'style_image' — cannot build brief.html, which shows "
+              "it as Picture 2 on every entry; crops are still written to "
+              f"{refs_dir}", file=sys.stderr)
+        return 1
 
     entries = []
-    for obj in kept:
+    for obj in pictured:
         for view in obj["views"]:
             entries.append({
                 "id": "{}-{}".format(obj["id"], view),
@@ -314,6 +379,15 @@ def main(argv=None) -> int:
             # again") working from out_dir.
             raw = json.loads(analysis_path.read_text(encoding="utf-8"))
             raw["style_image"] = str(parsed.style_image)
+            # Per-object source needs the same stamping, and for the same
+            # reason: task 7 could leave it alone because nothing cropped from
+            # it yet, but prepare_refs does now, so a rerun of this copy from
+            # out_dir must still find every object's own picture.
+            sources = {obj["id"]: obj["source"] for obj in parsed.objects}
+            for raw_obj in raw.get("objects", []):
+                source = sources.get(raw_obj.get("id"))
+                if source is not None:
+                    raw_obj["source"] = str(source)
             inner_analysis.write_text(json.dumps(raw), encoding="utf-8")
     except OSError as exc:
         print(f"error: cannot write {brief_path}: {exc}", file=sys.stderr)
