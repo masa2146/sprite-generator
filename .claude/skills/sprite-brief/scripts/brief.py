@@ -161,7 +161,22 @@ def prepare_refs(analysis, refs_dir) -> tuple[list[dict], list, dict]:
     contents: dict = {}
 
     boxed: dict[Path, list[dict]] = {}
+    # One id, checked here across all three shapes and every source image —
+    # not just within crop_objects's per-source screen_objects. Grouping by
+    # source narrowed that check to one image; two boxed objects with the same
+    # id in two DIFFERENT images now landed on the same refs_dir/<id>.png with
+    # no rejection printed at all, so the first object's picture silently
+    # became the second's. Case-folded to agree with screen_objects, which
+    # already treats "Block" and "block" as one filename on a case-insensitive
+    # filesystem.
+    seen: set[str] = set()
     for obj in analysis.objects:
+        obj_id = obj["id"]
+        if obj_id.lower() in seen:
+            rejected.append((obj_id, "duplicate id"))
+            continue
+        seen.add(obj_id.lower())
+
         mode = crop_mode(obj)
         if mode == "text":
             kept.append(dict(obj))

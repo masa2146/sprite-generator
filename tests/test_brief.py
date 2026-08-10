@@ -321,6 +321,77 @@ def test_a_rejected_box_does_not_take_its_neighbours_down():
     assert rejected and rejected[0][0] == "tiny"
 
 
+def test_a_duplicate_id_across_two_source_images_is_rejected():
+    """Grouping boxed objects by source narrowed screen_objects's duplicate
+    check to one image at a time. Two boxed objects sharing an id in two
+    DIFFERENT images used to land on the same refs_dir/<id>.png with no
+    rejection printed — the first object's picture silently became the
+    second's."""
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (200, 200), (10, 10, 10)).save(d / "a.png")
+    Image.new("RGB", (200, 200), (250, 250, 250)).save(d / "b.png")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [
+            {"id": "dup", "subject": "first", "source": "a.png",
+             "bbox": [10, 10, 90, 90]},
+            {"id": "dup", "subject": "second", "source": "b.png",
+             "bbox": [10, 10, 90, 90]},
+        ],
+    }), encoding="utf-8")
+    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert [o["id"] for o in kept] == ["dup"]
+    assert rejected == [("dup", "duplicate id")]
+    with Image.open(kept[0]["crop"]) as crop:
+        sample = crop.convert("RGB").getpixel((0, 0))
+    # a.png's near-black fill survived cleanup; b.png's near-white one never
+    # got a chance to overwrite the file.
+    assert sum(sample) < 200
+
+
+def test_a_whole_object_and_a_crop_object_sharing_an_id_is_rejected():
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (200, 200), (10, 10, 10)).save(d / "a.png")
+    Image.new("RGB", (200, 200), (250, 250, 250)).save(d / "b.png")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [
+            {"id": "dup", "subject": "first, whole", "source": "a.png"},
+            {"id": "dup", "subject": "second, boxed", "source": "b.png",
+             "bbox": [10, 10, 90, 90]},
+        ],
+    }), encoding="utf-8")
+    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert [o["id"] for o in kept] == ["dup"]
+    assert rejected == [("dup", "duplicate id")]
+    with Image.open(kept[0]["crop"]) as crop:
+        sample = crop.convert("RGB").getpixel((0, 0))
+    assert sum(sample) < 200
+
+
+def test_duplicate_ids_differing_only_in_case_are_rejected_across_sources():
+    """Consistent with screen_objects (crops.py), which already treats
+    "Block" and "block" as one filename on a case-insensitive filesystem."""
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (200, 200), (10, 10, 10)).save(d / "a.png")
+    Image.new("RGB", (200, 200), (250, 250, 250)).save(d / "b.png")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [
+            {"id": "Dup", "subject": "first", "source": "a.png",
+             "bbox": [10, 10, 90, 90]},
+            {"id": "dup", "subject": "second", "source": "b.png",
+             "bbox": [10, 10, 90, 90]},
+        ],
+    }), encoding="utf-8")
+    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert [o["id"] for o in kept] == ["Dup"]
+    assert rejected == [("dup", "duplicate id")]
+
+
 # --- the HTML brief ---------------------------------------------------------
 
 def _png(path, size=(20, 20), colour=(200, 30, 30)):
