@@ -74,6 +74,34 @@ def test_row_flatten_never_invents_a_colour():
     assert out.getpixel((5, 0)) in {(45, 150, 242), (60, 60, 110)}
 
 
+def test_flat_field_flattens_a_lighting_ramp_without_blacking_the_borders():
+    """flat_field is one of the three documented reasons refclean exists —
+    replacing its body with `return img.convert("RGB")` left all other tests
+    green, so nothing pinned it. Two things matter: the ramp gets flattened,
+    and _GAIN_LO/_GAIN_HI keep the correction from overshooting into black
+    strips at the borders (the blur has only one side to average there)."""
+    w, h = 60, 80
+    im = Image.new("RGB", (w, h))
+    for y in range(h):
+        level = 60 + round(120 * y / (h - 1))       # dark top, bright bottom
+        for x in range(w):
+            im.putpixel((x, y), (level, level, level))
+
+    out = refclean.flat_field(im)
+
+    def row_mean(img, y):
+        row = [img.getpixel((x, y)) for x in range(img.width)]
+        return sum(sum(p) for p in row) / (3 * len(row))
+
+    before = abs(row_mean(im, 0) - row_mean(im, h - 1))
+    after = abs(row_mean(out, 0) - row_mean(out, h - 1))
+    assert after < before * 0.8, "the top-to-bottom ramp must be flattened"
+
+    for x in (0, w - 1):
+        for y in (0, h // 2, h - 1):
+            assert sum(out.getpixel((x, y))) > 90, "clamp failed: border went black"
+
+
 def test_clean_crops_records_the_measured_palette_on_each_entry():
     d = Path(tempfile.mkdtemp())
     crop = d / "brick.png"

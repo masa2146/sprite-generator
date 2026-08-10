@@ -602,6 +602,31 @@ def test_a_malformed_blank_box_is_reported_not_silently_dropped():
     assert any("piece" in note for note in notes)
 
 
+# --- one unreadable source among several (finding 12) ------------------------
+
+def test_one_unreadable_source_does_not_take_the_others_down():
+    """prepare_refs isolates a failing source (brief.py's 'whole' branch and
+    its boxed-group branch each catch OSError on their own Image.open) so an
+    object from a different, readable source survives."""
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (200, 200), (90, 90, 120)).save(d / "good.png")
+    bad = d / "bad.png"
+    bad.write_text("not an image", encoding="utf-8")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [
+            {"id": "ok", "subject": "x", "source": "good.png", "bbox": [10, 10, 90, 90]},
+            {"id": "broken", "subject": "y", "source": "bad.png", "bbox": [10, 10, 90, 90]},
+        ],
+    }), encoding="utf-8")
+    kept, rejected, _, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert [o["id"] for o in kept] == ["ok"]
+    assert len(rejected) == 1
+    assert rejected[0][0] == "broken"
+    assert "bad.png" in rejected[0][1]
+
+
 # --- the HTML review page ----------------------------------------------------
 
 def _rendered(objects, style_image="shot.png", images=("shot.png",)):
