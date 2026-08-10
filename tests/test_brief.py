@@ -554,6 +554,36 @@ def test_an_id_of_style_does_not_collide_with_the_style_copy():
         assert im.size == (200, 200)
 
 
+# --- unrecognised view names (finding 2) -------------------------------------
+
+def test_a_mistyped_view_produces_a_note_naming_the_object_and_the_name():
+    d = Path(tempfile.mkdtemp())
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [{"id": "alpha", "subject": "x", "views": ["3/4", "frnt"]}],
+    }), encoding="utf-8")
+    _, _, _, notes = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert any("alpha" in note and "3/4" in note and "frnt" in note for note in notes)
+
+
+def test_the_written_copy_carries_the_normalised_views_not_the_typed_ones():
+    d = Path(tempfile.mkdtemp())
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [{"id": "alpha", "subject": "x", "views": ["3/4"]}],
+    }), encoding="utf-8")
+    out_dir = d / "brief"
+    code = brief.main(["--analysis", str(path), "--out-dir", str(out_dir), "--no-open"])
+    assert code == 0
+    stamped = json.loads((out_dir / "analysis.json").read_text())
+    # "3/4" is not a VIEW_POOL member, so normalise_views drops it and falls
+    # back to the default — the copy procedural-sprites reads must agree with
+    # what review.html actually rendered, not with what the user typed.
+    assert stamped["objects"][0]["views"] == ["front"]
+
+
 # --- the HTML review page ----------------------------------------------------
 
 def _rendered(objects, style_image="shot.png", images=("shot.png",)):

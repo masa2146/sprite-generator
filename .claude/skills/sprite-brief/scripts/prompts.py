@@ -205,6 +205,8 @@ def normalise_views(views) -> list[str]:
     Closed pool so file names stay predictable and the same analysis twice
     yields the same set. A name outside it is dropped rather than passed
     through, because an unknown view would silently get the `front` phrase.
+    Dropping it here is still safe — see dropped_views below, whose job is
+    making sure that drop gets reported instead of vanishing.
     """
     wanted = {v for v in views if isinstance(v, str)} if isinstance(views, list) else set()
     ordered = [v for v in VIEW_POOL if v in wanted]
@@ -214,6 +216,25 @@ def normalise_views(views) -> list[str]:
             and DEFAULT_VIEW not in ordered):
         ordered = [DEFAULT_VIEW] + ordered
     return ordered or [DEFAULT_VIEW]
+
+
+def dropped_views(views) -> list[str]:
+    """Names in `views` that normalise_views silently discards, in the order
+    they were given.
+
+    A sibling rather than a second return value, so normalise_views's
+    existing callers and signature are untouched. brief.load_analysis calls
+    both and hands this one to prepare_refs to report as a note — a view the
+    user typed and misspelled is their input, not noise, and this branch's
+    own invariant is that a rejected input gets reported.
+    """
+    if not isinstance(views, list):
+        return []
+    out: list[str] = []
+    for v in views:
+        if isinstance(v, str) and v not in VIEW_POOL and v not in out:
+            out.append(v)
+    return out
 
 
 # Beyond this many, the prompt clause stops being a description and becomes a

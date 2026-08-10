@@ -135,7 +135,15 @@ def load_analysis(path) -> Analysis:
                              "give the object a 'source' or the analysis a "
                              "'style_image'")
         entry["bbox"] = list(bbox) if bbox is not None else None
-        entry["views"] = prompts.normalise_views(obj.get("views"))
+        raw_views = obj.get("views")
+        entry["views"] = prompts.normalise_views(raw_views)
+        # Private to this module: a name typed in 'views' that the closed pool
+        # does not recognise (a typo like "frnt", or a value from a schema
+        # this branch does not support like "3/4"). normalise_views drops it
+        # rather than passing it through, and prepare_refs turns this into a
+        # note naming the object and the bad name, rather than the silent
+        # drop it used to be.
+        entry["_dropped_views"] = prompts.dropped_views(raw_views)
         # labelled_sheet captions each crop with this flag. Multiple views is
         # the only motion signal this schema carries, so it is what the caption
         # reports — a caption that misdescribes its crop is what this whole
@@ -200,6 +208,11 @@ def prepare_refs(analysis, refs_dir) -> tuple[list[dict], list, dict, list[str]]
             rejected.append((obj_id, "duplicate id"))
             continue
         seen.add(obj_id.lower())
+
+        bad_views = obj.get("_dropped_views") or []
+        if bad_views:
+            notes.append(f"{obj_id}: unrecognised view name(s) dropped: "
+                         + ", ".join(bad_views))
 
         mode = crop_mode(obj)
         # blank is measured in source-image pixels and its rationale (a ban
@@ -475,7 +488,24 @@ def main(argv=None) -> int:
                 p = palettes.get(raw_obj.get("id"))
                 if p is not None:
                     raw_obj["palette"] = p
-            inner_analysis.write_text(json.dumps(raw), encoding="utf-8")
+            # Same reasoning again for 'views': load_analysis normalises them
+            # (drops an unrecognised name, adds 'front' ahead of a rotation),
+            # but `raw` is re-parsed from the ORIGINAL file and so still holds
+            # whatever the user typed. Left unstamped, review.html and this
+            # copy would disagree on exactly the mistyped inputs — the one
+            # case where "both paths run from one source of truth" matters
+            # most, since procedural-sprites reads this copy, not the page.
+            views = {obj["id"]: obj["views"] for obj in parsed.objects}
+            for raw_obj in raw.get("objects", []):
+                v = views.get(raw_obj.get("id"))
+                if v is not None:
+                    raw_obj["views"] = v
+            # indent=2: this file is the hand-edit review loop SKILL.md tells
+            # the user to run again, and a one-line JSON blob is hostile to
+            # that. ensure_ascii=False keeps style_source's Turkish values
+            # (e.g. "kullanıcı") literal instead of \u-escaped.
+            inner_analysis.write_text(
+                json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
     except OSError as exc:
         print(f"error: cannot write {review_path}: {exc}", file=sys.stderr)
         return 1
