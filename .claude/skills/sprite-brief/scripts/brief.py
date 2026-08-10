@@ -454,6 +454,17 @@ def main(argv=None) -> int:
                 source = sources.get(raw_obj.get("id"))
                 if source is not None:
                     raw_obj["source"] = str(source)
+            # clean_crops measured each cropped object's real palette onto
+            # `kept`, but `raw` here is re-parsed from the ORIGINAL file, so
+            # without this the measurement only ever reaches review.html and
+            # never analysis.json — and analysis.json, not review.html, is
+            # what procedural-sprites reads. Do not drop this as redundant
+            # with review.html; it is the only copy a drawing subagent sees.
+            palettes = {obj["id"]: obj["palette"] for obj in kept if "palette" in obj}
+            for raw_obj in raw.get("objects", []):
+                p = palettes.get(raw_obj.get("id"))
+                if p is not None:
+                    raw_obj["palette"] = p
             inner_analysis.write_text(json.dumps(raw), encoding="utf-8")
     except OSError as exc:
         print(f"error: cannot write {review_path}: {exc}", file=sys.stderr)

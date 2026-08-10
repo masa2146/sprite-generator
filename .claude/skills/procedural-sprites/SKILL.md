@@ -34,7 +34,7 @@ Everything a job produces lives under `sprites-generated/<set>/`:
     brief/    analysis.json · review.html · refs/
     scripts/  style.py · <asset>.py · sprite_lib.py + sdf3d.py (copied here)
     out/      the sprites themselves
-    qc/       _qc_sheet.png · cmp_<id>.png · _silhouette.png
+    qc/       _qc_sheet.png · cmp_<id>.png
 
 Copy `scripts/sprite_lib.py` and `scripts/sdf3d.py` from this skill into the
 set's `scripts/` on the first run. Copied, not imported from the skill: the
@@ -102,8 +102,8 @@ Write `scripts/style.py` yourself, before any asset exists:
 PALETTE  = {"hide": "#B4522E", "horn": "#E8E8EF", "metal": "#E3B505"}
 LIGHT    = (-0.45, -0.75, 0.5)     # one vector for the whole set
 CAMERA   = 12.0                    # degrees of tilt, shared by every asset
-MATERIALS = {"hide": dict(rough=0.55, spec=0.25, spec_color="#FFE9C7"),
-             "horn": dict(rough=0.30, spec=0.60, spec_color="#FFFFFF")}
+MATERIALS = {"hide": dict(spec=0.25, spec_color="#FFE9C7"),
+             "horn": dict(spec=0.60, spec_color="#FFFFFF")}   # both are render() kwargs
 CONTOUR  = 6                       # dark outline width at SS scale
 SS       = 4                       # supersample factor
 ```

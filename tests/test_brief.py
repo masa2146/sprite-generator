@@ -734,6 +734,27 @@ def test_the_review_copy_stamps_per_object_source_too():
         assert parsed.objects[0]["source"] == (d / "obj.png").resolve()
 
 
+def test_the_review_copy_stamps_the_measured_palette_too():
+    """clean_crops measures a cropped object's real palette onto `kept`, but
+    the copy written to out_dir is re-parsed from the ORIGINAL file — so
+    without stamping it here, the measurement reaches review.html and never
+    analysis.json, which is what procedural-sprites actually reads. A
+    text-only object has no crop and so must get no 'palette' key at all."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data = _analysis(objects=[
+            {"id": "alpha", "bbox": [10, 10, 110, 110], "views": ["front"],
+             "subject": "a thing"},
+            {"id": "label", "subject": "a text badge with no picture"},
+        ])
+        code, out_dir, _s = _run(tmp, data)
+        assert code == 0
+
+        stamped = json.loads((out_dir / "analysis.json").read_text())
+        by_id = {o["id"]: o for o in stamped["objects"]}
+        assert re.fullmatch(r"#[0-9A-F]{6}", by_id["alpha"]["palette"][0])
+        assert "palette" not in by_id["label"]
+
+
 def test_a_bad_analysis_writes_nothing_and_exits_one():
     data = _analysis()
     del data["style"]
