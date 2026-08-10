@@ -194,13 +194,18 @@ def test_a_hard_specular_has_a_crisp_edge():
         h[..., 0][region].max(), b[..., 0][region].max())
 
 
-def test_a_hard_specular_never_appears_on_the_shadowed_side():
-    """The lit gate multiplies inside the pow's base, so an unlit point
-    raises zero to a large power and the highlight is gone rather than dim.
-    (18, 15) sits inside the highlight patch; (8, 21) is one of the two hit
-    pixels on this render with a genuinely negative N.L (not merely dim) -
-    the true shadowed side, which must come out bit-for-bit identical to a
-    spec=0 render of the same material, not just "under some brightness"."""
+def test_a_hard_specular_is_bit_identical_to_spec_zero_in_shadow():
+    """Not a test of where the gate multiplies - once it's binarised,
+    `(ndh * lit) ** n` and `(ndh ** n) * lit` agree everywhere except a
+    hairline seam where `ndh` is already ~0, so no render-level test can
+    tell the two placements apart (see the comment beside the gate in
+    sdf3d.py). What this guarantees instead, and what callers actually rely
+    on: the shadowed side renders with NO specular contribution at all,
+    not a dim one. (18, 15) sits inside the highlight patch; (8, 21) is one
+    of the two hit pixels on this render with a genuinely negative N.L (not
+    merely dim) - the true shadowed side, which must come out bit-for-bit
+    identical to a spec=0 render of the same material, not just "under some
+    brightness"."""
     hard = surface([(sphere(0.7), material((120, 120, 120), spec=1.0,
                                            shininess=20, spec_hard=0.2))])
     nospec = surface([(sphere(0.7), material((120, 120, 120), spec=0.0,

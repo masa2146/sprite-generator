@@ -302,6 +302,17 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
         # into the base, for this exact reason. The 0.01 width (here and in
         # the threshold below) is an anti-aliasing epsilon, not a softness
         # knob.
+        #
+        # Once `lit` is binarised to {0, 1}, `lit**n == lit`, so multiplying
+        # it into the base (`(ndh * lit) ** n`) and multiplying it against
+        # the result (`(ndh ** n) * lit`) compute the same thing everywhere
+        # but a hairline seam where `ndh` is already ~0 - no render can tell
+        # the two placements apart. It stays inside the base because that is
+        # what the cited sources do, and because it is the form that stays
+        # correct if this gate is ever softened back into a continuous term
+        # (a soft `lit` raised to a large power kills the highlight on the
+        # lit side too, which is the bug this replaced) - not because the
+        # placement is observable today.
         lit = np.clip(lam / 0.01, 0, 1)
         hot = (ndh * lit) ** np.maximum(shin_a * shin_a, 1.0)
         edge = np.clip((hot - hard_a) / 0.01, 0, 1)
