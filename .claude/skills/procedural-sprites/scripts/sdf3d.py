@@ -286,7 +286,18 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
 
         lam = np.clip(nh @ L, 0, 1)
         Hv = L + np.array([0, 0, 1.0]); Hv /= np.linalg.norm(Hv)
-        sp = np.clip(nh @ Hv, 0, 1) ** shin_a
+        ndh = np.clip(nh @ Hv, 0, 1)
+        soft_sp = ndh ** shin_a
+        # The cel highlight: a very high exponent, then a threshold, so the
+        # result is a flat patch with an anti-aliased boundary rather than a
+        # falloff. The lit term multiplies INSIDE the base — an unlit point
+        # raises zero to a large power, so the highlight is absent in shadow
+        # rather than merely dim. The 0.01 width is an anti-aliasing epsilon,
+        # not a softness knob.
+        lit = np.clip(lam, 0, 1)
+        hot = (ndh * lit) ** np.maximum(shin_a * shin_a, 1.0)
+        edge = np.clip((hot - hard_a) / 0.01, 0, 1)
+        sp = np.where(np.isnan(hard_a), soft_sp, edge)
         # Five taps marched along the normal, Quilez's estimator: each sample
         # asks how much closer the surface is than the step that was taken,
         # which is exactly how concave the neighbourhood is. The single sample

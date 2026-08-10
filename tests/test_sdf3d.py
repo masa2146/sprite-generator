@@ -151,6 +151,38 @@ def test_an_empty_band_list_is_the_linear_ramp():
     assert np.allclose(ramp_bands([])(lam), ramp_linear()(lam))
 
 
+def test_a_hard_specular_has_a_crisp_edge():
+    """A soft highlight fades over many values; a cel one is a flat patch of
+    one colour with an anti-aliased boundary. Counting distinct brightnesses
+    inside the lit region separates them."""
+    soft = surface([(sphere(0.7), material((120, 120, 120), spec=0.9,
+                                           shininess=40))])
+    hard = surface([(sphere(0.7), material((120, 120, 120), spec=0.9,
+                                           shininess=40, spec_hard=0.5))])
+    s = np.asarray(_small(sphere(0.7), color=soft, ao=0.0, rim=0.0))
+    h = np.asarray(_small(sphere(0.7), color=hard, ao=0.0, rim=0.0))
+    inside = (s[..., 3] > 250)
+    assert len(np.unique(h[..., 0][inside])) < len(np.unique(s[..., 0][inside]))
+
+
+def test_a_hard_specular_never_appears_on_the_shadowed_side():
+    """The lit gate multiplies inside the pow's base, so an unlit point
+    raises zero to a large power and the highlight is gone rather than dim."""
+    hard = surface([(sphere(0.7), material((60, 60, 60), spec=1.0,
+                                           shininess=40, spec_hard=0.5))])
+    a = np.asarray(_small(sphere(0.7), color=hard, ao=0.0, rim=0.0,
+                          light=(-0.9, 0.2, 0.3))).astype(int)
+    # columns 6/25 are background for this sphere's silhouette on row 16
+    # (it only spans columns 7-24 at frame=1.15, size 32) - sampling them
+    # compares two 0.0 backgrounds and can never pass. 7 and 24 are the
+    # silhouette's own edge pixels, keeping the left-lit/right-shadowed
+    # intent of the original columns.
+    lit_side = a[16, 7, :3].mean()
+    dark_side = a[16, 24, :3].mean()
+    assert dark_side < lit_side, (dark_side, lit_side)
+    assert dark_side < 80, dark_side
+
+
 def test_a_banded_render_has_flat_steps():
     """Cel shading is not a look this library picks — it is a ramp the asset
     hands in. What the renderer must guarantee is that the steps come out
