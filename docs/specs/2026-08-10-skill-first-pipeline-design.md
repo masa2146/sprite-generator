@@ -163,9 +163,13 @@ en küçük yeniden kullanılabilir birim; ölçek kontrolü; `style` nesne adı
 içeremez; `blank` kaynak-görsel pikselleridir; rakam/harf/etiket asla
 `subject`/`form`/`detail`'e yazılmaz.
 
-Düşen kural: "`style` kamera açısı adlandıramaz". Sebebi prompt'taki VIEW
-satırıyla çelişmesiydi; prompt yolu ölüyor ve kamera artık paylaşılan render
-sabitini besliyor.
+Düşen kural: "`style` kamera açısı adlandıramaz". Kamera artık analizde
+zorunlu, çünkü prosedürel yolun paylaşılan kamera eğimi sabitini besliyor.
+
+Ama prompt metninde hâlâ düşürülür: elle üretim prompt'u nesne başına kendi
+`VIEW` satırını taşıyor, ve stil satırındaki bir açı `front` dışındaki her
+view'da onunla çelişiyor. Yani `camera` analizde yaşar, `ART STYLE` satırına
+girmez — düşürme işi `prompts.style_line`'ın, analizi yazanın değil.
 
 ## 3. `sprite-brief`: girdiler opsiyonel, kırpma bir karar
 
