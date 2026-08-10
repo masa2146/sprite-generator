@@ -27,7 +27,10 @@ _CELL = 220                # longest edge of a crop as drawn on the sheet
 
 # The model's id becomes a filename (refs_dir / f"{id}.png") and, in cli.py, an
 # asset id used the same way — untrusted, so it must not contain "/" or "..".
-_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+# Public (not _ID_RE) because brief.prepare_refs also validates ids for the
+# 'whole' and 'text' shapes, which never reach screen_objects below — only
+# the 'crop' shape does.
+ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
 def reject_reason(bbox, img_w: int, img_h: int) -> str | None:
@@ -73,7 +76,7 @@ def screen_objects(objects, img_w: int, img_h: int) -> tuple[list[dict], list]:
         if not isinstance(obj_id, str) or not obj_id.strip():
             rejected.append((f"object[{index}]", "missing id"))
             continue
-        if not _ID_RE.fullmatch(obj_id):
+        if not ID_RE.fullmatch(obj_id):
             rejected.append((obj_id, "unusable id"))
             continue
         # Case-folded: "Block" and "block" are two asset ids but one filename on

@@ -186,6 +186,16 @@ def prepare_refs(analysis, refs_dir) -> tuple[list[dict], list, dict, list[str]]
     seen: set[str] = set()
     for obj in analysis.objects:
         obj_id = obj["id"]
+        # crops._ID_RE's format check lived only inside screen_objects, which
+        # just the 'crop' branch below reaches. The 'whole' and 'text' shapes
+        # never touch it — an id like "../escaped" wrote outside refs_dir with
+        # no rejection at all, and "_style" (unusable id: no leading alnum)
+        # silently collided with the _style.png this function writes further
+        # down, so the wrong picture ended up under that object's label with
+        # nothing saying so. Checked here, once, for all three shapes.
+        if not crops.ID_RE.fullmatch(obj_id):
+            rejected.append((obj_id, "unusable id"))
+            continue
         if obj_id.lower() in seen:
             rejected.append((obj_id, "duplicate id"))
             continue

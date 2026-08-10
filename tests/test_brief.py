@@ -496,6 +496,64 @@ def test_duplicate_ids_differing_only_in_case_are_rejected_across_sources():
     assert rejected == [("dup", "duplicate id")]
 
 
+# --- id format, all three crop shapes (finding 1) ----------------------------
+
+def test_a_whole_shape_object_with_a_path_escaping_id_is_rejected():
+    """crops._ID_RE's format check lived only inside screen_objects, which
+    just the 'crop' branch reaches — a 'whole' object's id went straight into
+    refs_dir / f"{id}.png" with no check at all, so "../escaped" wrote outside
+    the refs directory."""
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (120, 90), (40, 160, 90)).save(d / "one.png")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [{"id": "../escaped", "subject": "a blob", "source": "one.png"}],
+    }), encoding="utf-8")
+    kept, rejected, _, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert kept == []
+    assert rejected == [("../escaped", "unusable id")]
+    assert not (d / "escaped.png").exists()
+
+
+def test_a_text_shape_object_with_a_bad_id_is_rejected():
+    d = Path(tempfile.mkdtemp())
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [{"id": "a/b", "subject": "a thing I described"}],
+    }), encoding="utf-8")
+    kept, rejected, _, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert kept == []
+    assert rejected == [("a/b", "unusable id")]
+
+
+def test_an_id_of_style_does_not_collide_with_the_style_copy():
+    """"_style" starts with "_", which ID_RE rejects (no leading alnum) — the
+    same regex that already rejects "../escaped". Before this check covered
+    the 'whole' shape, an object named "_style" wrote refs/_style.png, and
+    then main()'s own shutil.copyfile(style_image) silently overwrote it, so
+    review.html showed the whole screenshot as that object's crop with
+    nothing saying so."""
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (200, 200), (90, 90, 120)).save(d / "shot.png")
+    Image.new("RGB", (120, 90), (40, 160, 90)).save(d / "one.png")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE, "style_image": "shot.png",
+        "objects": [
+            {"id": "alpha", "subject": "a thing", "bbox": [10, 10, 90, 90]},
+            {"id": "_style", "subject": "a blob", "source": "one.png"},
+        ],
+    }), encoding="utf-8")
+    out_dir = d / "brief"
+    code = brief.main(["--analysis", str(path), "--out-dir", str(out_dir), "--no-open"])
+    assert code == 0
+    with Image.open(out_dir / "refs" / "_style.png") as im:
+        # the style image (200x200), never "one.png" (120x90) under a stolen name
+        assert im.size == (200, 200)
+
+
 # --- the HTML review page ----------------------------------------------------
 
 def _rendered(objects, style_image="shot.png", images=("shot.png",)):
