@@ -109,3 +109,26 @@ def test_a_surface_can_be_the_base_of_a_decal_stack():
                           ao=0.0, rim=0.0)).astype(int)
     green = ((a[..., 1] > 180) & (a[..., 0] < 120) & (a[..., 3] > 250)).sum()
     assert green > 0, "the decal never reached the surface"
+
+
+def test_ao_darkens_a_crease_more_than_a_flat_face():
+    """Two spheres pushed into each other make a crease along the seam. With
+    ao off the seam shades like everything else; with ao on it has to go
+    darker, which is what makes parts read as joined rather than stacked."""
+    a = sphere(0.45, (-0.28, 0.0, 0.0))
+    b = sphere(0.45, (0.28, 0.0, 0.0))
+    shape = union(a, b)
+    off = np.asarray(_small(shape, color=flat((200, 200, 200)), ao=0.0,
+                            rim=0.0)).astype(int)
+    on = np.asarray(_small(shape, color=flat((200, 200, 200)), ao=0.8,
+                           rim=0.0)).astype(int)
+    seam_off = off[16, 16, :3].mean()
+    seam_on = on[16, 16, :3].mean()
+    # Column 10 is the same scanline as the seam but sits on one sphere's
+    # flat, well-lit cap, clear of both the crease and the silhouette's
+    # grazing rim (column 4 on this 32x32 render falls outside the merged
+    # spheres' ~[-0.73, 0.73] silhouette entirely and is a background miss,
+    # unrelated to the AO term either estimator computes).
+    edge_on = on[16, 10, :3].mean()
+    assert seam_on < seam_off - 12, (seam_on, seam_off)
+    assert seam_on < edge_on, (seam_on, edge_on)

@@ -168,12 +168,17 @@ def flat(rgb):
 # ------------------------------------------------------------ renderer
 def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
            light=None, ambient=0.42, diffuse=0.62, spec=0.5, shininess=40,
-           rim=0.10, ao=0.55, frame=1.15, bg_alpha=0,
+           rim=0.10, ao=0.55, ao_radius=0.12, frame=1.15, bg_alpha=0,
            spec_color=(255, 255, 255), rim_color=(255, 255, 255)):
     """Render an SDF to a final-size RGBA sprite.
 
     tilt: camera pitch in degrees (looking down when positive).
     frame: world half-width mapped to the image half-width - shrink to zoom.
+    ao_radius: how far the AO taps reach along the normal, in world units.
+    It is a parameter rather than a constant because the estimator is
+    scale-dependent: the visible frame in this renderer is roughly
+    x, y in [-1, 1], so a set working at a different scale needs a
+    different radius.
     Everything else is standard Blinn-Phong with a fake AO term derived from
     how concave the neighborhood is (cheap, stable, good enough for sprites).
     """
@@ -255,9 +260,17 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
         lam = np.clip(nh @ L, 0, 1)
         Hv = L + np.array([0, 0, 1.0]); Hv /= np.linalg.norm(Hv)
         sp = np.clip(nh @ Hv, 0, 1) ** shin_a
-        # fake AO: sample the SDF a bit along the normal; concave -> darker
-        occ = np.clip(sdf(ph + nh*0.08) / 0.08, 0, 1)
-        aoterm = 1 - ao*(1 - occ)
+        # Five taps marched along the normal, Quilez's estimator: each sample
+        # asks how much closer the surface is than the step that was taken,
+        # which is exactly how concave the neighbourhood is. The single sample
+        # this replaced could not tell a crease from a gentle curve.
+        occ = np.zeros(ph.shape[0])
+        sca = 1.0
+        for i in range(1, 6):
+            hstep = 0.01 + ao_radius * i / 5.0
+            occ += (hstep - sdf(ph + nh*hstep)) * sca
+            sca *= 0.95
+        aoterm = np.clip(1.0 - 3.0*ao*occ, 0, 1)
         rimterm = rim_a * np.clip(1 - nh[:, 2], 0, 1)**2
         c = base*(ambient + diffuse*lam[:, None])*aoterm[:, None] \
             + scol_a*(spec_a*sp)[:, None] + rcol_a*rimterm[:, None]
