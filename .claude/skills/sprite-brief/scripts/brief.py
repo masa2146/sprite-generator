@@ -227,6 +227,16 @@ def prepare_refs(analysis, refs_dir) -> tuple[list[dict], list, dict, list[str]]
             notes.append(f"{obj_id}: 'blank' is ignored — the object is not "
                          f"cut from a box ({mode} reference), so there is no "
                          "crop to paint the boxes out of")
+        elif mode == "crop" and isinstance(obj.get("blank"), list):
+            # 'blank' on the wrong SHAPE (just above) is reported; a box of
+            # the wrong ARITY inside a correctly-shaped 'blank' used to be
+            # filtered out by crops.blank_contents with no trace at all — the
+            # same silent-drop shape this note already exists to close.
+            bad_boxes = sum(1 for b in obj["blank"]
+                            if not (isinstance(b, (list, tuple)) and len(b) == 4))
+            if bad_boxes:
+                notes.append(f"{obj_id}: 'blank' has {bad_boxes} malformed "
+                             "box(es) (expected [x1, y1, x2, y2]) — ignored")
         if mode == "text":
             kept.append(dict(obj))
         elif mode == "whole":
@@ -300,10 +310,13 @@ def _swatches(colours) -> str:
     """Measured colours as squares plus their hex, because a name is not
     reproducible: a conveyor's channel was called 'pale lilac-white' when it is
     #434375, and the sprite stayed pale until the measured value went into the prompt."""
+    # Filtered like prompts.field_block's own swatches line: analysis.json is
+    # hand-edited between runs (the documented review loop), and a non-string
+    # entry reached html.escape unguarded and crashed with an AttributeError.
     return "".join(
         f"<span class='swatch' style='background:{html.escape(c)}'></span>"
         f"<code>{html.escape(c)}</code>"
-        for c in colours or [])
+        for c in (colours or []) if isinstance(c, str))
 
 
 def page(analysis, kept, contents, title: str) -> str:

@@ -120,4 +120,3 @@ If the user asks for JSON, emit exactly this shape:
 
 This is the `style` block of `analysis.json`. `sprite-brief` writes it into
 the file; on its own this skill still only reads and reports.
-</content>

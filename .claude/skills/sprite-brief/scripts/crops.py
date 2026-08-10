@@ -257,6 +257,12 @@ def blank_contents(kept, contents, image) -> list[str]:
     letterbox bars, so every blanked box came back a black slab.
 
     Returns the ids whose crops were rewritten.
+
+    A 'blank' box of the wrong arity (not [x1, y1, x2, y2]) is filtered here
+    without comment — brief.prepare_refs is where that gets reported, in the
+    same note it already writes for 'blank' on the wrong crop shape, since
+    that is the one place in this pipeline that collects notes to relay to
+    the user. This function stays a pure "shape in, pixels out" step.
     """
     by_id = {obj["id"]: obj for obj in kept}
     framed = {inner for ids in contents.values() for inner in ids}

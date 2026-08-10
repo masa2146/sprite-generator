@@ -135,6 +135,10 @@ python3 .claude/skills/sprite-brief/scripts/brief.py \
     --analysis analysis.json --out-dir sprites-generated/<set>/brief --no-open
 ```
 
+If plain `python3` lacks `pillow`/`numpy` — this step can run before the venv
+above ever exists — fall back to `sprites-generated/.venv/bin/python` the same
+way, per `sprite-brief/SKILL.md`.
+
 ## The hand-generation path
 
 If you'd rather not draw in code, `review.html`'s second half is a

@@ -584,6 +584,24 @@ def test_the_written_copy_carries_the_normalised_views_not_the_typed_ones():
     assert stamped["objects"][0]["views"] == ["front"]
 
 
+# --- a malformed 'blank' box, wrong arity (finding 10) -----------------------
+
+def test_a_malformed_blank_box_is_reported_not_silently_dropped():
+    """'blank' on the wrong SHAPE (a whole/text object) is already reported.
+    'blank: [[1, 2, 3]]' — the right shape, a box of the wrong ARITY — used to
+    be filtered out by crops.blank_contents with no trace at all."""
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (200, 200), (90, 90, 120)).save(d / "shot.png")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [{"id": "piece", "subject": "x", "source": "shot.png",
+                    "bbox": [10, 10, 90, 90], "blank": [[1, 2, 3]]}],
+    }), encoding="utf-8")
+    _, _, _, notes = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert any("piece" in note for note in notes)
+
+
 # --- the HTML review page ----------------------------------------------------
 
 def _rendered(objects, style_image="shot.png", images=("shot.png",)):

@@ -111,12 +111,18 @@ def main(argv=None) -> int:
                         help="png files, or directories holding them")
     parser.add_argument("--out-dir", required=True,
                         help="directory to write the cut PNGs into")
-    parser.add_argument("--glow", action="store_true",
-                        help="soft additive effect: take the alpha from "
-                             "brightness instead of matting a subject")
-    parser.add_argument("--key", action="store_true",
-                        help="(default) asset sheet on one flat colour: flood "
-                             "the background colour in from the border")
+    # Mutually exclusive rather than --key silently losing to --glow: an
+    # accepted-then-ignored flag is the same shape of silent drop this branch
+    # spent several commits closing elsewhere (ids, blank, views). `--key
+    # --glow --tol 30` used to run glow with none of `--key` or `--tol`
+    # honoured, and said nothing about it.
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--glow", action="store_true",
+                      help="soft additive effect: take the alpha from "
+                           "brightness instead of matting a subject")
+    mode.add_argument("--key", action="store_true",
+                      help="(default) asset sheet on one flat colour: flood "
+                           "the background colour in from the border")
     parser.add_argument("--tol", type=float, default=14.0,
                         help="--key colour distance treated as background "
                              "(default 14)")
@@ -141,10 +147,13 @@ def main(argv=None) -> int:
     for src in sources:
         try:
             img = trim_and_pad(cut(src.read_bytes()))
+            img.save(out_dir / src.name)
         except OSError as exc:
+            # save() lives in the same try as the read: a permissions error or
+            # a full disk on one file must not abort the whole batch with a
+            # traceback when the rest are still worth writing.
             print(f"  skipped {src.name}: {exc}", file=sys.stderr)
             continue
-        img.save(out_dir / src.name)
         print(f"{src.name} -> {out_dir / src.name}")
 
     return 0

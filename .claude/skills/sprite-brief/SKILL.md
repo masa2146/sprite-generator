@@ -165,6 +165,25 @@ python3 .claude/skills/sprite-brief/scripts/brief.py \
 There is no `--image` flag — every image path lives inside the analysis and
 resolves against it, so the file travels with its own pictures.
 
+Plain `python3` needs `pillow` and `numpy` importable, and this step can run
+before `procedural-sprites` has ever created the workspace venv that
+guarantees them — a fresh machine, or the moment this skill is symlinked into
+another project, tracebacks with `ModuleNotFoundError` here otherwise. If the
+command above fails that way, fall back to the same workspace venv
+`procedural-sprites` uses:
+
+```bash
+[ -x sprites-generated/.venv/bin/python ] || {
+  python3 -m venv sprites-generated/.venv
+  sprites-generated/.venv/bin/pip install -q pillow numpy
+}
+sprites-generated/.venv/bin/python .claude/skills/sprite-brief/scripts/brief.py \
+    --analysis analysis.json --out-dir sprites-generated/<set>/brief --no-open
+```
+
+If the venv cannot be created either, stop and show the user the commands
+above. Do not guess at a fix.
+
 It validates every box, crops or copies each object's reference per the shape
 decided in step 3, blanks out of each crop anything it frames or that `blank`
 names, cleans the crops, and renders `<out-dir>/review.html`. Anything it
