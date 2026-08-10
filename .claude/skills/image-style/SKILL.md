@@ -1,29 +1,30 @@
 ---
 name: image-style
-description: Analyse a reference image into a fixed style schema — render, camera, lighting, palette, linework, realism — plus what the image depicts, and turn them into a style prefix and a ready reproduction prompt. Use when the user shares an image and wants its look described, reproduced, or turned into a sprite-generator pack's style prefix.
+description: Analyse a reference image (or a user's own words, when there is no image) into a fixed style schema — render, camera, lighting, palette, linework, realism — plus what the image depicts, and turn them into a style prefix and a ready reproduction prompt. Use when the user shares an image and wants its look described or reproduced, or when a sprite job needs its style fields resolved for analysis.json.
 ---
 
 # Image Style Analysis
 
-Read a reference image and describe it in a fixed schema, then turn that schema
-into two pieces of prompt text.
-
-This produces the same schema as `spritegen analyze` in the sprite_generator
-project, so output from either can be used in place of the other. Unlike the
-CLI, this skill needs no API endpoint or key — you can see the image directly.
+Read whatever is available for a sprite job — a style image, one or more
+reference images, the user's own words, any combination, or none of them —
+and resolve the six style fields into a fixed schema, then turn that schema
+into two pieces of prompt text. It does not crop, it does not draw, and it
+does not write to disk; resolving the fields and reporting them is the whole
+job.
 
 ## What to do
 
-1. **Read the image** the user points at.
-2. **Fill in the schema below.** Every field. If something genuinely cannot be
-   determined, say so in that field rather than leaving it blank or inventing
-   detail.
-3. **Print the three blocks** in the Output section.
+1. **Read what's given.** A style image and reference image(s) if present,
+   and the user's own words always — words are an input even when there is no
+   image at all.
+2. **Resolve every field of the schema below**, one at a time, following the
+   precedence order. If a field genuinely cannot be determined by anything —
+   no words, no picture — say so rather than inventing detail; it gets
+   stamped `varsayılan`.
+3. **Print the blocks** in the Output section.
 
 **Write nothing to disk and run no commands.** This skill only reads and
-reports. If the user wants the result written into a pack file, that is
-`spritegen analyze`'s job — tell them the command rather than editing the file
-yourself.
+reports.
 
 ## Schema
 
@@ -48,11 +49,37 @@ the coin.
 Give hex codes in `palette`, not colour names. "Warm orange" is not
 reproducible; `#FF6B4A` is.
 
+`camera` is read by two different consumers and only one of them wants it. The
+procedural path turns it into the shared camera-tilt constant every asset in
+the set renders with. The hand-generation prompt leaves it out, because that
+prompt carries its own VIEW line per object and an angle in the style line
+contradicts it on every view but front. Fill the field either way — dropping
+it is `prompts.style_line`'s job, not yours.
+
+## Precedence: the user's words win, field by field
+
+This skill runs on every sprite job, with or without a style image. Each of
+the six fields is resolved on its own:
+
+    the user's words  >  the style image  >  the reference image(s)  >  default
+
+A field the user did not touch keeps what the image said. If the picture is
+jelly-cartoon and the user asked for pixel art, `render` and `realism` come
+from the user while `camera`, `lighting`, `palette` and `linework` stay with
+the picture. If the user only said "darker palette", only `palette` moves.
+
+Record where each field came from — `kullanıcı`, `stil görseli`, `referans`,
+`ölçüm`, `varsayılan` — and emit it as `style_source`. The review page prints
+it beside each field, which is what makes an override that landed on the wrong
+field visible instead of silent. A field nobody claimed and no picture shows
+is stamped `varsayılan`; never invent one quietly.
+
 ## Output
 
 ### 1. Metrics table
 
-The six style fields and the subject, one per row.
+The six style fields and the subject, one per row, with `style_source` beside
+each style field.
 
 ### 2. Style prefix
 
@@ -62,8 +89,8 @@ The style fields joined in this exact order, comma-separated, subject excluded:
 render, camera, lighting, linework, realism, palette
 ```
 
-This is what goes in a pack's `[style] prefix`. The order is fixed so that
-every pack's prefix carries the same axes in the same sequence.
+The order is fixed so that every job's style line carries the same axes in the
+same sequence.
 
 ### 3. Reproduction prompt
 
@@ -74,7 +101,9 @@ image or a close sibling:
 <subject>, <style prefix>
 ```
 
-If the user asks for JSON, emit exactly this shape so it matches the CLI:
+### 4. JSON
+
+If the user asks for JSON, emit exactly this shape:
 
 ```json
 {
@@ -82,18 +111,13 @@ If the user asks for JSON, emit exactly this shape so it matches the CLI:
     "render": "...", "camera": "...", "lighting": "...",
     "palette": "...", "linework": "...", "realism": "..."
   },
-  "subject": "..."
+  "style_source": {
+    "render": "kullanıcı", "camera": "stil görseli", "lighting": "stil görseli",
+    "palette": "ölçüm", "linework": "varsayılan", "realism": "kullanıcı"
+  }
 }
 ```
 
-## Using it with the sprite generator
-
-To write the result into a pack instead of copying by hand:
-
-```bash
-spritegen analyze <image> --pack packs/<name>.toml
-```
-
-That writes the `[style] prefix`, copies the image to
-`out/<pack>/style_bible.png`, and with `--add-asset <id>` appends the subject as
-a new asset. Add `--dry-run` to preview without writing.
+This is the `style` block of `analysis.json`. `sprite-brief` writes it into
+the file; on its own this skill still only reads and reports.
+</content>
