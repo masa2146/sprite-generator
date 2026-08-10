@@ -287,7 +287,7 @@ def test_a_whole_image_object_is_copied_not_cut():
         "style": FULL_STYLE,
         "objects": [{"id": "blob", "subject": "a blob", "source": "one.png"}],
     }), encoding="utf-8")
-    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    kept, rejected, _, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
     assert not rejected
     assert kept[0]["crop"].name == "blob.png"
     with Image.open(kept[0]["crop"]) as done:
@@ -303,7 +303,7 @@ def test_a_text_only_object_gets_no_crop_and_is_not_rejected():
         "style": FULL_STYLE,
         "objects": [{"id": "idea", "subject": "a thing I described"}],
     }), encoding="utf-8")
-    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    kept, rejected, _, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
     assert not rejected
     assert kept[0].get("crop") is None
     assert kept[0].get("palette") in (None, [])
@@ -319,11 +319,56 @@ def test_a_text_only_object_writes_no_ref_even_with_a_style_image():
         "style": FULL_STYLE, "style_image": "shot.png",
         "objects": [{"id": "idea", "subject": "a shield, not in this screenshot"}],
     }), encoding="utf-8")
-    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    kept, rejected, _, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
     assert not rejected
     assert kept[0]["id"] == "idea"
     assert kept[0].get("crop") is None
     assert not (d / "refs" / "idea.png").exists()
+
+
+def test_a_blank_on_a_whole_image_object_is_reported_not_silently_dropped():
+    # blank is only wired up for a bbox-cropped object (crops.blank_contents).
+    # A 'whole' object that carries one gets no crash and no effect — which is
+    # the silent drop this whole flow is built against — so it must be named
+    # in the notes instead.
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (120, 90), (40, 160, 90)).save(d / "one.png")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [{"id": "blob", "subject": "a blob", "source": "one.png",
+                    "blank": [[0, 0, 10, 10]]}],
+    }), encoding="utf-8")
+    kept, rejected, _, notes = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert not rejected
+    assert kept[0]["id"] == "blob"  # still kept: this is a note, not a rejection
+    assert any("blob" in note for note in notes)
+
+
+def test_a_blank_on_a_text_only_object_is_reported_too():
+    d = Path(tempfile.mkdtemp())
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [{"id": "idea", "subject": "a thing I described",
+                    "blank": [[0, 0, 10, 10]]}],
+    }), encoding="utf-8")
+    _, _, _, notes = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert any("idea" in note for note in notes)
+
+
+def test_a_blank_on_a_cropped_object_is_not_reported():
+    # the one shape blank actually does something on — no note expected
+    d = Path(tempfile.mkdtemp())
+    Image.new("RGB", (200, 200), (90, 90, 120)).save(d / "shot.png")
+    path = d / "analysis.json"
+    path.write_text(json.dumps({
+        "style": FULL_STYLE,
+        "objects": [{"id": "alpha", "subject": "x", "source": "shot.png",
+                    "bbox": [10, 10, 90, 90], "blank": [[20, 20, 30, 30]]}],
+    }), encoding="utf-8")
+    _, _, _, notes = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    assert notes == []
 
 
 def test_boxes_are_only_compared_within_one_source_image():
@@ -341,7 +386,7 @@ def test_boxes_are_only_compared_within_one_source_image():
              "bbox": [20, 20, 120, 120]},
         ],
     }), encoding="utf-8")
-    _, _, contents = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    _, _, contents, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
     assert "big" not in contents, "boxes from two different images were compared"
 
 
@@ -358,7 +403,7 @@ def test_a_box_inside_another_on_the_same_image_is_still_found():
              "bbox": [60, 60, 120, 120]},
         ],
     }), encoding="utf-8")
-    _, _, contents = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    _, _, contents, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
     assert contents.get("tray") == ["puck"]
 
 
@@ -375,7 +420,7 @@ def test_a_rejected_box_does_not_take_its_neighbours_down():
              "bbox": [10, 10, 14, 14]},
         ],
     }), encoding="utf-8")
-    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    kept, rejected, _, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
     assert [o["id"] for o in kept] == ["good"]
     assert rejected and rejected[0][0] == "tiny"
 
@@ -399,7 +444,7 @@ def test_a_duplicate_id_across_two_source_images_is_rejected():
              "bbox": [10, 10, 90, 90]},
         ],
     }), encoding="utf-8")
-    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    kept, rejected, _, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
     assert [o["id"] for o in kept] == ["dup"]
     assert rejected == [("dup", "duplicate id")]
     with Image.open(kept[0]["crop"]) as crop:
@@ -422,7 +467,7 @@ def test_a_whole_object_and_a_crop_object_sharing_an_id_is_rejected():
              "bbox": [10, 10, 90, 90]},
         ],
     }), encoding="utf-8")
-    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    kept, rejected, _, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
     assert [o["id"] for o in kept] == ["dup"]
     assert rejected == [("dup", "duplicate id")]
     with Image.open(kept[0]["crop"]) as crop:
@@ -446,7 +491,7 @@ def test_duplicate_ids_differing_only_in_case_are_rejected_across_sources():
              "bbox": [10, 10, 90, 90]},
         ],
     }), encoding="utf-8")
-    kept, rejected, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
+    kept, rejected, _, _ = brief.prepare_refs(brief.load_analysis(path), d / "refs")
     assert [o["id"] for o in kept] == ["Dup"]
     assert rejected == [("dup", "duplicate id")]
 
@@ -464,7 +509,7 @@ def _rendered(objects, style_image="shot.png", images=("shot.png",)):
     path = d / "analysis.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     parsed = brief.load_analysis(path)
-    kept, _, contents = brief.prepare_refs(parsed, d / "refs")
+    kept, _, contents, _ = brief.prepare_refs(parsed, d / "refs")
     return brief.page(parsed, kept, contents, "t")
 
 

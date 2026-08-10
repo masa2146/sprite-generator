@@ -140,7 +140,11 @@ Rules, carried over because every one of them was measured:
   tile, a label under a housing. Words cannot do this job — a ban that
   contradicts the picture loses every time — and this is the only lever that
   can. Boxes that belong to another listed object are handled automatically,
-  in both directions; `blank` is for everything else.
+  in both directions; `blank` is for everything else. It only takes effect on
+  an object that is cut from a box (the `bbox` shape from step 3) — a
+  `source`-only whole picture is used as it is, `blank` and all. Putting one on
+  a whole or text-only object is not rejected, but does nothing; the script
+  says so in its notes rather than staying quiet about it.
 - Numbers, letters and labels printed on an object are gameplay variables, not
   design — the game draws its own value over the finished sprite, and the
   prompt these fields feed bans text outright. Never put a glyph, a numeral or
@@ -164,8 +168,9 @@ resolves against it, so the file travels with its own pictures.
 It validates every box, crops or copies each object's reference per the shape
 decided in step 3, blanks out of each crop anything it frames or that `blank`
 names, cleans the crops, and renders `<out-dir>/review.html`. Anything it
-rejects is printed with a reason — relay those to the user, never drop them
-silently.
+rejects is printed with a reason, and anything it silently ignored otherwise —
+today, a `blank` on an object that was not cut from a box — is printed as a
+note naming the object. Relay both to the user, never drop them.
 
 Cleaning is not cosmetic and is not optional. A crop lifted from a phone
 screenshot carries the capture's pixel steps, the screen's top-to-bottom

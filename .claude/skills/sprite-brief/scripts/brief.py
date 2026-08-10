@@ -159,8 +159,8 @@ def crop_mode(obj: dict) -> str:
     return "crop" if obj.get("bbox") else "whole"
 
 
-def prepare_refs(analysis, refs_dir) -> tuple[list[dict], list, dict]:
-    """Write every object's reference image. Returns (kept, rejected, contents).
+def prepare_refs(analysis, refs_dir) -> tuple[list[dict], list, dict, list[str]]:
+    """Write every object's reference image. Returns (kept, rejected, contents, notes).
 
     Boxes are compared for containment within one source image only: two boxes
     in two different screenshots have no spatial relationship, and reporting one
@@ -172,6 +172,7 @@ def prepare_refs(analysis, refs_dir) -> tuple[list[dict], list, dict]:
     kept: list[dict] = []
     rejected: list = []
     contents: dict = {}
+    notes: list[str] = []
 
     boxed: dict[Path, list[dict]] = {}
     # One id, checked here across all three shapes and every source image —
@@ -191,6 +192,18 @@ def prepare_refs(analysis, refs_dir) -> tuple[list[dict], list, dict]:
         seen.add(obj_id.lower())
 
         mode = crop_mode(obj)
+        # blank is measured in source-image pixels and its rationale (a ban
+        # that contradicts the picture loses, and this is the only lever that
+        # beats it) holds for any picture — it is only WIRED UP for a
+        # bbox-cropped object today, via crops.blank_contents below. That is a
+        # gap in where it is applied, not a rule about what the field means.
+        # Left silent, a 'whole' or 'text' object carrying a 'blank' looks
+        # accepted and does nothing, which is exactly the silent drop this
+        # flow is built against.
+        if obj.get("blank") and mode != "crop":
+            notes.append(f"{obj_id}: 'blank' is ignored — the object is not "
+                         f"cut from a box ({mode} reference), so there is no "
+                         "crop to paint the boxes out of")
         if mode == "text":
             kept.append(dict(obj))
         elif mode == "whole":
@@ -224,7 +237,7 @@ def prepare_refs(analysis, refs_dir) -> tuple[list[dict], list, dict]:
     # After blanking, which maps source-image boxes into crop coordinates that
     # the upscale in here would invalidate.
     refclean.clean_crops([o for o in kept if o.get("crop")])
-    return kept, rejected, contents
+    return kept, rejected, contents, notes
 
 
 _CSS = """
@@ -373,13 +386,16 @@ def main(argv=None) -> int:
         return 1
 
     try:
-        kept, rejected, contents = prepare_refs(parsed, refs_dir)
+        kept, rejected, contents, notes = prepare_refs(parsed, refs_dir)
     except OSError as exc:
         print(f"error: cannot write refs to {refs_dir}: {exc}", file=sys.stderr)
         return 1
 
     for obj_id, reason in rejected:
         print(f"  dropped {obj_id}: {reason}", file=sys.stderr)
+
+    for note in notes:
+        print(f"note: {note}", file=sys.stderr)
 
     if not kept:
         print("error: no usable objects — nothing written", file=sys.stderr)
