@@ -11,7 +11,7 @@ exactly once at the end of each asset.
 """
 import math
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageChops
 
 SS = 4  # supersample factor; all coordinates below are in SS-space
 
@@ -222,6 +222,26 @@ def contact_sheet(images, path, bg=(128, 128, 128, 255), pad=14, max_w=560,
         sheet.alpha_composite(im, (px, py))
     sheet.convert('RGB').save(path)
     return sheet
+
+
+def contour(img, width=2, color=(26, 26, 46), threshold=110, ss=3):
+    """The set's dark outline, at one width the whole way round.
+
+    The alpha is HARD-THRESHOLDED before it is grown. Dilating an
+    anti-aliased alpha instead makes the line's width follow how soft the
+    edge happens to be, which is why one asset's horn tips came out blurred
+    while its flat sides came out crisp.
+    """
+    big = img.resize((img.width*ss, img.height*ss), Image.LANCZOS)
+    a = big.getchannel("A").point(lambda v: 255 if v > threshold else 0)
+    grown = a.filter(ImageFilter.MaxFilter(width*2 + 1))
+    ring = ImageChops.subtract(grown, a)
+    layer = Image.new("RGBA", big.size, tuple(color) + (0,))
+    layer.putalpha(ring)
+    out = Image.new("RGBA", big.size, (0, 0, 0, 0))
+    out.alpha_composite(layer)
+    out.alpha_composite(big)
+    return out.resize(img.size, Image.LANCZOS)
 
 
 # ------------------------------------------------ relief shading (v2)
