@@ -3,9 +3,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from spritegen import brief
-from spritegen import extract
-from spritegen import vision
+import brief
 
 
 def _analysis(**overrides):
@@ -32,24 +30,12 @@ def _write(tmp, data):
     return path
 
 
-def test_views_are_filtered_to_the_pool_and_ordered():
-    assert brief.normalise_views(["side", "front"]) == ["front", "side"]
-
-
-def test_a_view_outside_the_pool_is_dropped():
-    assert brief.normalise_views(["isometric", "front"]) == ["front"]
-
-
-def test_no_usable_view_falls_back_to_front():
-    assert brief.normalise_views([]) == ["front"]
-    assert brief.normalise_views("front") == ["front"]
-    assert brief.normalise_views(["isometric"]) == ["front"]
-
-
 def test_load_analysis_returns_style_and_objects():
     with tempfile.TemporaryDirectory() as tmp:
         style, objects = brief.load_analysis(_write(tmp, _analysis()))
-    assert style == "soft 3D cartoon, glossy plastic, #2e2c4a, #ffffff"
+    # Schema v1's one-line style, wrapped as the dict prompts.asset_prompt
+    # expects — see the bridge comment in load_analysis.
+    assert style == {"render": "soft 3D cartoon, glossy plastic, #2e2c4a, #ffffff"}
     assert [o["id"] for o in objects] == ["alpha"]
     assert objects[0]["views"] == ["front", "side"]
     assert objects[0]["animated"] is True
@@ -112,108 +98,6 @@ def test_unreadable_json_names_the_file():
             assert "analysis.json" in str(exc)
         else:
             raise AssertionError("expected BriefError")
-
-
-# --- prompt assembly --------------------------------------------------------
-
-STYLE = "soft 3D cartoon, glossy plastic, #2e2c4a, #ffffff"
-
-
-def _obj(**overrides):
-    obj = {
-        "id": "bunny_white",
-        "subject": "a round white rabbit",
-        "form": "one rounded body with two long ears",
-        "detail": "pink inner ears, dot eyes",
-    }
-    obj.update(overrides)
-    return obj
-
-
-def test_the_prompt_labels_what_each_uploaded_image_is_for():
-    """Impossible over the API, which sends references unlabelled — the model
-    had to guess which image to copy and which was only the art style."""
-    text = brief.asset_prompt(_obj(), "front", STYLE)
-    assert "REFERENCES" in text
-    # "Picture 1"/"Picture 2": what the local backend writes into the model's
-    # context, and what reads naturally to a human uploading two files by hand.
-    assert "Picture 1" in text and "Picture 2" in text
-    assert "ONLY for art style" in text
-
-
-def test_every_prompt_forbids_more_than_one_copy():
-    """The measured failure: a crop showing several balls produced a sheet of
-    twelve, because nothing in the text said how many to draw."""
-    text = brief.asset_prompt(_obj(), "front", STYLE)
-    assert "Exactly one" in text
-    assert "more than one copy of the object" in text
-    assert "Not a set, not a grid, not a sheet." in text
-
-
-def test_every_prompt_forbids_text():
-    """HUD labels kept their text when asked for blank versions, so the ban is
-    stated here as well as omitted from the fields."""
-    assert "any text, numbers, labels or logos" in brief.asset_prompt(_obj(), "front", STYLE)
-
-
-def test_the_style_line_is_repeated_in_full():
-    """The image model never sees chat history, so a prompt that relies on an
-    earlier message is broken by design."""
-    text = brief.asset_prompt(_obj(), "front", STYLE)
-    assert STYLE in text
-
-
-def test_the_view_phrase_comes_from_the_pool():
-    text = brief.asset_prompt(_obj(), "side", STYLE)
-    assert vision.VIEW_POOL["side"] in text
-    assert vision.VIEW_POOL["front"] not in text
-
-
-def test_an_unknown_view_falls_back_to_front():
-    text = brief.asset_prompt(_obj(), "isometric", STYLE)
-    assert vision.VIEW_POOL["front"] in text
-
-
-def test_the_state_line_appears_only_when_a_state_is_given():
-    assert "STATE" not in brief.asset_prompt(_obj(), "front", STYLE)
-    with_state = brief.asset_prompt(
-        _obj(state="empty — without the object it normally holds"), "front", STYLE)
-    assert "STATE" in with_state
-    assert "without the object it normally holds" in with_state
-
-
-def test_contained_objects_become_a_do_not_draw_line():
-    text = brief.asset_prompt(_obj(id="conveyor"), "top_down", STYLE,
-                              contents=["block_cluster", "launch_ball"])
-    assert "block cluster" in text and "launch ball" in text
-    assert "reference image" in text
-
-
-def test_no_contained_objects_means_no_such_line():
-    text = brief.asset_prompt(_obj(), "front", STYLE)
-    assert "visible inside it in the reference image" not in text
-
-
-def test_a_long_contained_list_is_summarised():
-    ids = [f"thing_{i}" for i in range(9)]
-    text = brief.asset_prompt(_obj(), "front", STYLE, contents=ids)
-    named = [i for i in ids if i.replace("_", " ") in text]
-    assert len(named) == extract.MAX_NAMED_CONTENTS
-    assert "and 5 other elements" in text
-
-
-def test_one_extra_contained_object_is_singular():
-    ids = [f"thing_{i}" for i in range(5)]
-    text = brief.asset_prompt(_obj(), "front", STYLE, contents=ids)
-    assert "and 1 other element" in text
-    assert "1 other elements" not in text
-
-
-def test_missing_subject_fields_do_not_break_the_block():
-    text = brief.asset_prompt({"id": "mystery_thing"}, "front", STYLE)
-    assert "OBJECT" not in text
-    assert "Exactly one mystery thing" in text
-    assert vision.VIEW_POOL["front"] in text
 
 
 # --- the HTML brief ---------------------------------------------------------

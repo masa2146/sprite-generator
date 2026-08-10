@@ -24,31 +24,13 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import config
-from . import extract
-from . import refclean
-from . import vision
+import crops
+import prompts
+import refclean
 
 
 class BriefError(Exception):
     """The analysis could not be turned into a brief."""
-
-
-def normalise_views(views) -> list[str]:
-    """Pool members only, in pool order, never empty.
-
-    Closed pool so file names stay predictable and the same analysis twice
-    yields the same set. A name outside it is dropped rather than passed
-    through, because an unknown view would silently get the `front` phrase.
-    """
-    wanted = {v for v in views if isinstance(v, str)} if isinstance(views, list) else set()
-    ordered = [v for v in vision.VIEW_POOL if v in wanted]
-    # A rotated frame is turned from the front frame; without it there is
-    # nothing to turn.
-    if (any(v in vision.ROTATION_DEGREES for v in ordered)
-            and vision.DEFAULT_VIEW not in ordered):
-        ordered = [vision.DEFAULT_VIEW] + ordered
-    return ordered or [vision.DEFAULT_VIEW]
 
 
 def load_analysis(path) -> tuple[str, list[dict]]:
@@ -88,40 +70,19 @@ def load_analysis(path) -> tuple[str, list[dict]]:
                 f"objects[{index}] ({obj_id}): 'bbox' must be [x1, y1, x2, y2]"
             )
         entry = dict(obj)
-        entry["views"] = normalise_views(obj.get("views"))
+        entry["views"] = prompts.normalise_views(obj.get("views"))
         # labelled_sheet captions each crop with this flag. Multiple views is
         # the only motion signal this schema carries, so it is what the caption
         # reports — a caption that misdescribes its crop is what this whole
         # review step exists to catch.
         entry["animated"] = len(entry["views"]) > 1
         out.append(entry)
-    return style.strip(), out
 
-
-# Background is a flat grey rather than transparent because the downloaded file
-# is cut locally with post.py, and that was measured clean on #808080 while
-# #FF00FF bled colour into the alpha edges. Asking a model for a transparent
-# PNG varies by model and cannot be relied on. The wording of every block below
-# lives in config, shared with the paid path so the two cannot drift.
-
-
-def asset_prompt(obj: dict, view: str, style: str, contents=None) -> str:
-    """One paste-ready prompt for this object in this view.
-
-    Structured blocks rather than a paragraph: on the paid path the constraints
-    were buried in a run-on sentence and the ones that mattered were the ones
-    the model skipped.
-    """
-    # Naming, capping and pluralisation come from extract so the two callers
-    # cannot drift apart.
-    exclude = extract.exclusion_clause(contents) if contents else ""
-    return "\n\n".join([
-        config.REFERENCES_BLOCK,
-        vision.field_block(obj, view),
-        f"ART STYLE  {style.strip()}",
-        config.output_block(obj["id"].replace("_", " "), square=True),
-        config.do_not_draw(exclude),
-    ])
+    # Schema v1 carries style as one line. v2 (the next task) replaces this
+    # with the six-field object image-style produces; wrapping it here keeps
+    # the move honest — one change at a time.
+    style = {"render": style.strip()}
+    return style, out
 
 
 _CSS = """
@@ -172,7 +133,7 @@ def page(entries, style_image: Path, title: str) -> str:
     out += [
         "<figure class='style'>",
         f"<img src='{style_uri}' alt=''>",
-        f"<figcaption>image2 — {html.escape(style_image.name)} — upload this "
+        f"<figcaption>Picture 2 — {html.escape(style_image.name)} — upload this "
         "with EVERY message, alongside the crop</figcaption>",
         "</figure>",
     ]
@@ -183,8 +144,8 @@ def page(entries, style_image: Path, title: str) -> str:
             f"<h2>{html.escape(entry['id'])}</h2>",
             "<div class='row'>",
             f"<figure><img src='{_data_uri(crop)}' alt=''>"
-            f"<figcaption>image1 — {html.escape(crop.name)}</figcaption></figure>",
-            f"<p class='pair'>+ image2 — {html.escape(style_image.name)}</p>",
+            f"<figcaption>Picture 1 — {html.escape(crop.name)}</figcaption></figure>",
+            f"<p class='pair'>+ Picture 2 — {html.escape(style_image.name)}</p>",
             "</div>",
             f"<pre>{html.escape(entry['prompt'])}</pre>",
             "</div>",
@@ -204,7 +165,7 @@ def _load_image(image_path: Path):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        prog="spritegen brief",
+        prog="brief",
         description="Turn a screenshot and its analysis into crops and "
                     "paste-ready prompts for manual generation.",
     )
@@ -214,9 +175,6 @@ def main(argv=None) -> int:
                         help="directory to create; refused if it already holds a brief")
     parser.add_argument("--no-open", action="store_true",
                         help="do not open the contact sheet")
-    parser.add_argument("--pack", default=None, metavar="PATH",
-                        help="also write a buildable pack from this same analysis, "
-                             "for generating through a local endpoint instead of by hand")
     args = parser.parse_args(argv)
 
     image_path = Path(args.image)
@@ -246,7 +204,7 @@ def main(argv=None) -> int:
         return 1
 
     try:
-        kept, rejected = extract.crop_objects(image, objects, refs_dir)
+        kept, rejected = crops.crop_objects(image, objects, refs_dir)
     except OSError as exc:
         print(f"error: cannot write crops to {refs_dir}: {exc}", file=sys.stderr)
         return 1
@@ -258,8 +216,8 @@ def main(argv=None) -> int:
         print("error: no usable objects — nothing written", file=sys.stderr)
         return 1
 
-    contents = extract.find_contents(kept)
-    extract.blank_contents(kept, contents, image)
+    contents = crops.find_contents(kept)
+    crops.blank_contents(kept, contents, image)
     # After blanking, which maps source-image boxes into crop coordinates that
     # the upscale here would invalidate.
     refclean.clean_crops(kept)
@@ -277,7 +235,7 @@ def main(argv=None) -> int:
 
     sheet = None
     try:
-        sheet = extract.labelled_sheet(kept, refs_dir / "_contact_sheet.png")
+        sheet = crops.labelled_sheet(kept, refs_dir / "_contact_sheet.png")
     except Exception as exc:
         # A review aid must not cost the user the crops and prompts.
         print(f"warning: contact sheet not written: {exc}", file=sys.stderr)
@@ -288,7 +246,7 @@ def main(argv=None) -> int:
             entries.append({
                 "id": "{}-{}".format(obj["id"], view),
                 "crop": obj["crop"],
-                "prompt": asset_prompt(obj, view, style, contents.get(obj["id"])),
+                "prompt": prompts.asset_prompt(obj, view, style, contents.get(obj["id"])),
             })
 
     title = f"{out_dir.name} — prompts for manual generation"
@@ -300,27 +258,13 @@ def main(argv=None) -> int:
         print(f"error: cannot write {brief_path}: {exc}", file=sys.stderr)
         return 1
 
-    if args.pack:
-        # The same analysis, the same crops, the same prompt bodies — only the
-        # destination differs. Written on request rather than always, because
-        # this flow's whole point is that it costs nothing and needs no endpoint.
-        pack_path = Path(args.pack)
-        try:
-            pack = config.env_pack()
-            pack_path.parent.mkdir(parents=True, exist_ok=True)
-            pack_path.write_text(
-                extract.pack_text(pack.model, pack.key_env, style, kept,
-                                  refs_dir, pack_path, style_image=style_copy),
-                encoding="utf-8")
-            print(f"pack -> {pack_path}   (spritegen build {pack_path} --jobs 1)")
-        except (config.SpecError, OSError) as exc:
-            # The brief is the deliverable; a pack that could not be written
-            # must not cost the user the prompts and crops they already have.
-            print(f"warning: pack not written: {exc}", file=sys.stderr)
-
     print(f"\n{len(kept)} objects, {len(entries)} prompts -> {brief_path}")
     print(f"uploads -> {refs_dir}")
     if sheet and not args.no_open:
         webbrowser.open(Path(sheet).resolve().as_uri())
     return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 
