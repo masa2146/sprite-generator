@@ -165,11 +165,35 @@ def flat(rgb):
     return lambda p, n: np.broadcast_to(c, p.shape[:-1] + (3,)).copy()
 
 
+# -------------------------------------------------------------- ramps
+def ramp_linear(ambient=0.42, diffuse=0.62):
+    """The response this renderer has always had: ambient plus a linear
+    diffuse term. It is the default so that adding the seam changes nothing."""
+    return lambda lam: ambient + diffuse*lam
+
+
+def ramp_bands(thresholds, ambient=0.42, diffuse=0.62):
+    """Cel shading: N-L quantised at the given thresholds.
+
+    The band count, the band widths and the endpoints are the ramp's, not the
+    renderer's — that is how the technique is authored in practice, and
+    burying a band count in code is precisely what takes it away from whoever
+    is directing the look.
+    """
+    t = np.asarray(sorted(thresholds), float)
+    if t.size == 0:
+        return ramp_linear(ambient, diffuse)
+    def f(lam):
+        step = np.searchsorted(t, lam) / float(t.size)
+        return ambient + diffuse*step
+    return f
+
+
 # ------------------------------------------------------------ renderer
 def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
            light=None, ambient=0.42, diffuse=0.62, spec=0.5, shininess=40,
            rim=0.10, ao=0.55, ao_radius=0.12, frame=1.15, bg_alpha=0,
-           spec_color=(255, 255, 255), rim_color=(255, 255, 255)):
+           spec_color=(255, 255, 255), rim_color=(255, 255, 255), ramp=None):
     """Render an SDF to a final-size RGBA sprite.
 
     tilt: camera pitch in degrees (looking down when positive).
@@ -179,6 +203,9 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
     scale-dependent: the visible frame in this renderer is roughly
     x, y in [-1, 1], so a set working at a different scale needs a
     different radius.
+    ramp: N-L -> shade multiplier. None builds ramp_linear(ambient, diffuse),
+    so the two scalars keep working for a caller that never heard of ramps;
+    a caller that passes its own ramp has taken responsibility for both.
     Everything else is standard Blinn-Phong with a fake AO term derived from
     how concave the neighborhood is (cheap, stable, good enough for sprites).
     """
@@ -272,7 +299,8 @@ def render(sdf, size=(256, 256), tilt=15, yaw=0.0, color=flat((240, 160, 20)),
             sca *= 0.95
         aoterm = np.clip(1.0 - 3.0*ao*occ, 0, 1)
         rimterm = rim_a * np.clip(1 - nh[:, 2], 0, 1)**2
-        c = base*(ambient + diffuse*lam[:, None])*aoterm[:, None] \
+        shade_t = (ramp or ramp_linear(ambient, diffuse))(lam)
+        c = base*shade_t[:, None]*aoterm[:, None] \
             + scol_a*(spec_a*sp)[:, None] + rcol_a*rimterm[:, None]
         shade[hit] = np.clip(c, 0, 255)
 

@@ -8,6 +8,7 @@ from PIL import Image
 import sdf3d
 from sdf3d import flat, render, sphere, squash, torus_z, torus_y, scale_y
 from sdf3d import material, surface, union
+from sdf3d import ramp_bands, ramp_linear
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -132,3 +133,30 @@ def test_ao_darkens_a_crease_more_than_a_flat_face():
     edge_on = on[16, 10, :3].mean()
     assert seam_on < seam_off - 12, (seam_on, seam_off)
     assert seam_on < edge_on, (seam_on, edge_on)
+
+
+def test_the_default_ramp_is_the_old_arithmetic():
+    lam = np.linspace(0, 1, 9)
+    assert np.allclose(ramp_linear()(lam), 0.42 + 0.62*lam)
+
+
+def test_bands_quantise_the_response():
+    lam = np.linspace(0, 1, 101)
+    out = ramp_bands([0.35, 0.75])(lam)
+    assert len(np.unique(np.round(out, 6))) == 3, np.unique(out)
+
+
+def test_an_empty_band_list_is_the_linear_ramp():
+    lam = np.linspace(0, 1, 9)
+    assert np.allclose(ramp_bands([])(lam), ramp_linear()(lam))
+
+
+def test_a_banded_render_has_flat_steps():
+    """Cel shading is not a look this library picks — it is a ramp the asset
+    hands in. What the renderer must guarantee is that the steps come out
+    flat rather than smeared."""
+    img = _small(sphere(0.7), color=flat((200, 200, 200)),
+                 ramp=ramp_bands([0.35, 0.75]), ao=0.0, rim=0.0, spec=0.0)
+    a = np.asarray(img).astype(int)
+    lit = a[..., :3].max(axis=-1)[a[..., 3] > 250]
+    assert len(np.unique(lit)) <= 4, np.unique(lit)
