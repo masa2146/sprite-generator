@@ -355,7 +355,12 @@ def silhouette(img, color=(0, 0, 0)):
 def qc_strip(img, sizes, path, bg=(128, 128, 128, 255)):
     """The sprite at the sizes the game actually draws it, on the game's own
     backdrop colour. A sprite that does not read here does not ship, however
-    good it looks at 1024."""
+    good it looks at 1024.
+
+    `contact_sheet` pins the returned sheet's WIDTH at its own `max_w`
+    regardless of the tiles it was handed, so a caller checking that the
+    requested sizes actually took effect has to look at pixel content or
+    the sheet's height (when tiles share a row), never at its width."""
     return contact_sheet([(img.resize(s, Image.LANCZOS), None) for s in sizes],
                          path, bg=bg)
 

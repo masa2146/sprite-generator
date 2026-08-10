@@ -127,10 +127,16 @@ def test_readability_counts_dark_and_pale_pixels_at_game_size():
 
 
 def test_silhouette_keeps_the_shape_and_drops_the_colour():
-    s = np.asarray(silhouette(_disc()))
+    # _half_soft_disc, not _disc: a plain disc's alpha is strictly 0 or 255,
+    # so it can't tell "alpha copied through exactly" from "alpha
+    # re-thresholded at some cutoff" apart -- both land on the same 0/255
+    # result. The pre-blurred half gives a graded pixel to check instead.
+    img = _half_soft_disc()
+    s = np.asarray(silhouette(img))
     assert tuple(s[32, 32, :3]) == (0, 0, 0)
     assert s[32, 32, 3] == 255
     assert s[0, 0, 3] == 0
+    assert s[32, 52, 3] == np.asarray(img)[32, 52, 3] == 112
 
 
 def test_qc_strip_writes_a_sheet():
@@ -139,4 +145,12 @@ def test_qc_strip_writes_a_sheet():
     out = Path(tempfile.mkdtemp()) / "qc.png"
     qc_strip(_disc(), [(44, 52), (88, 104)], out, bg=(56, 54, 92, 255))
     assert out.exists()
-    assert Image.open(out).width > 44
+    # contact_sheet pins the sheet's WIDTH at max_w (560) no matter what the
+    # tiles are -- a variant that force-resized every tile to 1x1 still
+    # produces width 560, so a width check can't catch a broken resize.
+    # Height is the dimension contact_sheet actually derives from the tiles:
+    # both requested sizes fit in one row here, so height is
+    # pad + the taller tile's height (104) + pad (14 each side) = 132.
+    # A caller that ignored the requested sizes would land on a different
+    # number (e.g. 29 = pad + 1 + pad, if every tile were forced to 1x1).
+    assert Image.open(out).height == 132
