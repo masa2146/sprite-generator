@@ -89,9 +89,37 @@ def torus_y(R, r, center=(0, 0, 0)):
     return f
 
 
+def torus_z(R, r, center=(0, 0, 0)):
+    """Ring standing in the XY plane, facing the camera.
+
+    torus_y lies flat and disappears at tilt=0, so an asset that needs a ring
+    seen face-on — a septum ring, a hoop, a portal — cannot use it. This lived
+    in one set's private copy of the library until it was moved here.
+    """
+    c = np.array(center, float)
+    def f(p):
+        q = p - c
+        dxy = np.sqrt(q[..., 0]**2 + q[..., 1]**2) - R
+        return np.sqrt(dxy**2 + q[..., 2]**2) - r
+    return f
+
+
+def squash(fn, sx, sy, sz):
+    """Non-uniform scale of an SDF, Lipschitz-corrected by the smallest factor.
+
+    Approximate, which is all a sprite needs: an ear has to be flat
+    front-to-back like its reference's, and a capsule alone is a round stick.
+    Two character scripts each defined their own copy of this before it was
+    moved here.
+    """
+    inv = np.array([1.0 / sx, 1.0 / sy, 1.0 / sz])
+    k = min(sx, sy, sz)
+    return lambda p: fn(p * inv) * k
+
+
 def scale_y(fn, s):
-    """Squash/stretch a primitive along Y (approximate SDF, fine for small s)."""
-    return lambda p: fn(p * np.array([1, 1/s, 1])) * min(1.0, s)
+    """Squash/stretch a primitive along Y."""
+    return squash(fn, 1.0, s, 1.0)
 
 
 # ------------------------------------------------------------ combinators
