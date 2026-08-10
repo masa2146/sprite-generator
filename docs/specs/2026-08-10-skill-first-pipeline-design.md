@@ -6,11 +6,16 @@
 
 ## Amaç
 
-Proje artık bir CLI değil, üç skill üzerinden kullanılacak. Sprite üretimi
-diffusion modelinden (OpenRouter, yerel spritepipe) tamamen çıkıyor; üretimi
-`procedural-sprites` Python koduyla yapıyor. Bu doküman diffusion kodunun
-sökülmesini, hayatta kalan kodun skill'lerin içine taşınmasını, üç skill'in
-birbirine bağlanmasını ve çalışma alanının yeniden düzenlenmesini tanımlar.
+Proje artık bir CLI değil, üç skill üzerinden kullanılacak. Görsel üretim
+API'leri (OpenRouter, yerel spritepipe) tamamen çıkıyor; asıl üretim yolu
+`procedural-sprites`'ın yazdığı Python kodu. Elle üretim yolu — prompt'u
+Gemini/ChatGPT'ye yapıştırıp iki görseli yüklemek — korunuyor: orada bir
+yeniden deneme bedava, ve prompt metinlerinin hiçbiri bir endpoint'e bağlı
+değil.
+
+Bu doküman API kodunun sökülmesini, hayatta kalan kodun skill'lerin içine
+taşınmasını, üç skill'in birbirine bağlanmasını ve çalışma alanının yeniden
+düzenlenmesini tanımlar.
 
 ## Bağlam
 
@@ -35,8 +40,9 @@ Karakterde yetersiz — o Spec 2'nin konusu.
 | konu | karar |
 |---|---|
 | paketleme | `spritegen` paketi ve console script silinir; hayatta kalan Python skill'lerin `scripts/` klasörlerine iner |
-| brief çıktısı | `brief.html` → `review.html`: crop + ölçülen palet + alanlar. Image-model prompt blokları silinir |
-| `cut` / rembg | silinir; bağımlılık `pillow` + `numpy`'a iner |
+| brief çıktısı | `brief.html` → `review.html`: üstte inceleme (crop, ölçülen palet, alanlar), her nesnenin altında yapıştırmaya hazır prompt. **Prompt metinleri yaşar** — ölen yalnızca API'ye bağlanan kod |
+| elle üretim yolu | korunur: Gemini/ChatGPT'ye prompt + iki görsel yükleme akışı aynen kalır |
+| `cut` | kalır, saf numpy: `--key` (varsayılan) + `--glow`; rembg (matting modeli) gider |
 | `image-style` | ayrı skill kalır, **her akışta çalışır**, çıktısı `analysis.json`'un `style` bloğudur |
 | girdi görselleri | opsiyonel; kırpma bir karar, zorunluluk değil |
 | çalışma alanı | `sprites-generated/`, gitignore'da; her set için `brief/ scripts/ out/ qc/` |
@@ -57,15 +63,15 @@ Karakterde yetersiz — o Spec 2'nin konusu.
 | dosya | sebep |
 |---|---|
 | `spritegen/orclient.py` | iki HTTP transport'u, retry, cost ayrıştırma |
-| `spritegen/config.py` | pack/api/transport/key makinesi + image-model prompt blokları |
+| `spritegen/config.py`'nin pack/api yarısı | `Pack`, `Asset`, `load_pack`, `env_pack`, transport/key doğrulama. Prompt metinleri ölmez, `prompts.py`'a taşınır |
 | `spritegen/cli.py` | 10 alt komutun tamamı |
 | `spritegen/packwriter.py` | TOML pack düzenleme |
-| `spritegen/export.py` | pack → image-model HTML'i |
-| `spritegen/cutout.py`, `spritegen/post.py` | rembg kesme, trim/pad, palette match |
+| `spritegen/export.py` | pack → image-model HTML'i; işini `review.html` devralıyor |
+| `spritegen/post.py` | rembg kesme, `match_palette`, backdrop ölçümü. `trim_and_pad` ölmez, `cut.py`'a taşınır |
 | `spritegen/envfile.py`, `.env`, `.env.example` | API anahtarı yükleme |
-| `spritegen/vision.py` | API çağrısı yapan her şey (`analyze`, `analyze_objects`, prompt sabitleri) |
-| `spritegen/extract.py` | pack yazan yarısı (`pack_text`, `exclusion_clause`, `exclusion_names`) |
-| `tests/test_build.py`, `test_client.py`, `test_config.py`, `test_env.py`, `test_export.py`, `test_make.py`, `test_packwriter.py`, `test_post.py`, `test_cutout.py` | ölen kodun testleri |
+| `spritegen/vision.py` | API çağrısı yapan her şey (`analyze`, `analyze_objects`, HTTP payload'ları) |
+| `spritegen/extract.py` | pack yazan yarısı (`pack_text`) |
+| `tests/test_build.py`, `test_client.py`, `test_config.py`, `test_env.py`, `test_export.py`, `test_make.py`, `test_packwriter.py` | ölen kodun testleri |
 | `pyproject.toml`: `[project]`, `[project.scripts]`, `requests`, `rembg`, setuptools | paket kalmıyor |
 
 ### Yaşar ve taşınır → `.claude/skills/sprite-brief/scripts/`
@@ -75,19 +81,25 @@ Karakterde yetersiz — o Spec 2'nin konusu.
 | `brief.py` | `spritegen/brief.py` (HTML kısmı yeniden yazılır) | analiz okuma, akış, `review.html` |
 | `crops.py` | `spritegen/extract.py`'nin saf PIL yarısı | `reject_reason`, `screen_objects`, `padded_box` (`BOX_PAD = 0.12`), `crop_objects`, `find_contents`, `blank_contents`, `ring_median`, `labelled_sheet` |
 | `refclean.py` | `spritegen/refclean.py` | aynen: letterbox şeridi, `flat_field`, `upscale`, `row_flatten`, `palette` ölçümü, `clean_crops` |
+| `prompts.py` | `config.py`'nin metin yarısı + `vision.field_block` + `extract.exclusion_clause`/`exclusion_names` | elle üretim prompt'unun blokları: `REFERENCES`, alan bloğu (`OBJECT`/`FORM`/`DETAIL`/`VIEW`), `ART STYLE`, `OUTPUT`, `DO NOT DRAW` + sabit banlar, `BG_CLAUSE` (`#808080`), `VIEW_POOL`, `normalise_views` |
+| `cut.py` | `spritegen/cutout.py` + `post.trim_and_pad` | elle üretilmiş PNG'nin zeminini kesme: `--key` (kenardan flood-fill, artık **varsayılan**), `--glow`, `--tol`, sonra saydam kareye ortalama |
 
-`spritegen/vision.py`'den yalnızca saf metin parçaları `brief.py` içine taşınır:
-`VIEW_POOL`, `DEFAULT_VIEW`, `ROTATION_DEGREES`, `normalise_views`, alan
-etiketleri. Bunların hiçbiri API'ye dokunmuyor.
+`prompts.py` tamamen saf string ve saf PIL'dir; hiçbir yeri ağa dokunmaz. Ölen
+şey bu metinleri bir endpoint'e gönderen katmandır, metinlerin kendisi değil —
+elle üretim yolu onların üstünde duruyor.
+
+`cut.py`'da matting modeli (rembg) yok: prompt zaten düz `#808080` zemin
+garantiliyor, `--key` tam olarak o durumu kesiyor. Matting keyfi arkaplanlar
+içindi ve birkaç yüz MB model ağırlığı indiriyordu.
 
 ### Sonuç ağaç
 
 ```
 .claude/skills/
-  sprite-brief/       SKILL.md + scripts/{brief.py, crops.py, refclean.py}
+  sprite-brief/       SKILL.md + scripts/{brief.py, crops.py, refclean.py, prompts.py, cut.py}
   image-style/        SKILL.md
   procedural-sprites/ SKILL.md + references/ + scripts/{sprite_lib.py, sdf3d.py}
-tests/                test_brief.py, test_crops.py, test_refclean.py, conftest.py
+tests/                test_brief.py, test_crops.py, test_refclean.py, test_cut.py, conftest.py
 docs/                 (dokunulmaz) + bu doküman
 README.md  CLAUDE.md  LICENSE  pyproject.toml (yalnız pytest ayarı)
 sprites-generated/    gitignored çalışma alanı
@@ -181,15 +193,25 @@ rampasının düzlenmesi, upscale ve **crop'un gerçek renklerinin ölçülmesi*
 Ölçüm gerekçesi kayıtlı: bir konveyörün kanalına "soluk leylak-beyaz" denmişti,
 gerçek değeri `#434375`.
 
-**`review.html`** — `brief.html`'in yerine:
+**`review.html`** — `brief.html`'in yerine, iki bölümlü. İki çıktı yolunu da tek
+dosya besler: prosedürel kod ve elle üretim.
+
+*İnceleme bölümü* (yeni — kod yazılmadan önce gözle onay):
 
 - üstte stil bloğu: altı alan, her birinin yanında `style_source` etiketi; varsa
   stil görseli
 - her nesne için: crop (yoksa "görsel yok"), ölçülen palet swatch + hex,
   `subject`/`form`/`detail`/`state`, `views`, kaynak görsel adı
-- image-model blokları (`REFERENCES`, `OBJECT`, `OUTPUT`, `DO NOT DRAW`,
-  `#808080` backdrop, ban listesi) yok
-- amacı tek: kod yazılmadan önce gözle onay
+
+*Prompt bölümü* (korunur — Gemini/ChatGPT'ye yapıştırmak için):
+
+- her nesne ve her view için yapıştırmaya hazır blok: `REFERENCES`,
+  `OBJECT`/`FORM`/`DETAIL`/`VIEW`, `ART STYLE`, `OUTPUT` (`#808080` zemin),
+  `DO NOT DRAW`
+- yanında hangi iki görselin yükleneceği: nesnenin crop'u (`image1`) ve
+  `_style.png` (`image2`)
+- indirilen PNG `cut.py` ile kesilir — prompt saydamlık değil düz gri zemin
+  istiyor, çünkü modeller güvenilir alpha vermiyor
 
 Reddedilen kutular sebebiyle basılır ve kullanıcıya aktarılır; sessizce
 düşürülmez.
@@ -267,8 +289,15 @@ kullanıcı: [görsel(ler)] + [stil görseli] + metin
 `sprite-brief` SKILL.md'den silinecek bölümler: adım 7 (yerel endpoint teklifi),
 `spritegen check` / `build --only` döngüsü, `structure_mode` / `palette_master`
 / `--seed-offset` tavsiyeleri, backend'in "uydurulmuş renk" ve "izometrik kayma"
-arıza modları, "her mesajda iki görseli yükle" talimatı. Yerine: kırpma karar
-tablosu, `review.html` kontrolü ve `procedural-sprites`'a devir.
+arıza modları. Eklenecek: kırpma karar tablosu, `review.html` kontrolü,
+`procedural-sprites`'a devir.
+
+**Elle üretim talimatları aynen korunur**, çünkü sebepleri ölçülmüş: her mesajda
+iki görseli de yükle (model sohbet geçmişini görmüyor, en başta yüklenen
+ekran görüntüsü sonraki üretimlere ulaşmıyor, stil kayıyor), sprite başına tek
+mesaj, set başına yeni sohbet, indirileni `cut.py` ile kes. Ayrıca "kutuyu
+değiştir, prompt'u değil" kuralı ve `blank` kaldıracı da kalır — bir yasak,
+kendisiyle çelişen bir resmin karşısında her seferinde kaybediyor.
 
 ## 7. Subagent döngüsü
 
@@ -331,8 +360,9 @@ kalıp korunur: düz fonksiyonlar, fixture yok, plugin yok.
 | dosya | kapsam |
 |---|---|
 | `test_crops.py` | kutu doğrulama sınırları, `%12` padding, iç içe kutuların silinmesi, contact sheet üretimi *(mevcut `test_extract.py`'den devralınır)* |
-| `test_brief.py` | dört kırpma hâli, `style_source` override önceliği, `review.html` render'ı, hatalı analizin raporlanması *(mevcut dosya genişletilir)* |
+| `test_brief.py` | dört kırpma hâli, `style_source` override önceliği, `review.html`'in iki bölümü, prompt bloklarının sırası, hatalı analizin raporlanması *(mevcut dosya genişletilir)* |
 | `test_refclean.py` | letterbox şeridi, ışık rampası düzleme, ölçülen palet *(yeni — bugün testi yok)* |
+| `test_cut.py` | `--key` flood-fill sınırları ve `--tol`, `--glow` alfası, `trim_and_pad` ortalaması *(mevcut `test_cutout.py` + `test_post.py`'nin yaşayan yarısından devralınır)* |
 | `conftest.py` | skill `scripts/` yolunu `sys.path`'e ekler; kurulum gerekmez |
 
 `pyproject.toml` yalnızca `[tool.pytest.ini_options]` taşır.
@@ -341,7 +371,8 @@ kalıp korunur: düz fonksiyonlar, fixture yok, plugin yok.
 
 - `README.md` yeniden yazılır: paket/CLI/pack/transport/anahtar/maliyet
   bölümlerinin tamamı gider. Yerine üç skill, zincir, `sprites-generated`
-  düzeni, venv ve `analysis.json` şeması.
+  düzeni, venv, `analysis.json` şeması ve elle üretim yolu (`review.html`'in
+  prompt bölümü, iki görsel kuralı, `cut.py --key`).
 - `CLAUDE.md` yeniden yazılır: mimari bölümü artık skill'leri ve `scripts/`
   yerleşimini anlatır; ölü değişmezler (transport, key_env, reference rolleri,
   `cutout=false`, grey backdrop, `build_one` sözleşmesi) silinir; kalanlar
@@ -353,9 +384,14 @@ kalıp korunur: düz fonksiyonlar, fixture yok, plugin yok.
 
 1. `spritegen/` klasörü yok; `pip install` adımı hiçbir yerde geçmiyor.
 2. `.py` dosyalarında ve üç `SKILL.md`'de `openrouter`, `rembg`, `requests`,
-   `transport`, `key_env`, `diffusion` geçmiyor (`docs/` hariç — tarihsel kayıt).
+   `transport`, `key_env`, `base_url`, `api_key` geçmiyor (`docs/` hariç —
+   tarihsel kayıt). Ölçüt API yüzeyidir; elle üretim prompt'unun metinleri bu
+   listede yok ve yerinde durur.
 3. `python3 -m pytest` yeşil; ağ çağrısı yok.
 4. Uçtan uca duman testi: bir ekran görüntüsü + metinden `review.html` üretilir,
    onaydan sonra `sprites-generated/<set>/out/` altında en az bir PNG ve
    `qc/_qc_sheet.png` oluşur; tüm Python çalıştırmaları venv üzerinden geçer.
-5. `sprites-generated/` gitignore'da; repo çalışma çıktısı taşımıyor.
+5. Elle üretim yolu ayakta: `review.html` her nesne için yapıştırılabilir prompt
+   ve yüklenecek iki görseli gösteriyor; düz gri zeminli bir PNG `cut.py --key`
+   ile saydam kareye kesiliyor.
+6. `sprites-generated/` gitignore'da; repo çalışma çıktısı taşımıyor.
