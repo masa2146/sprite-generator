@@ -204,7 +204,11 @@ def test_a_missing_source_file_names_the_path():
 def test_a_bbox_is_optional_now():
     path = _analysis_dir({"style": FULL_STYLE, "style_image": "shot.png",
                           "objects": [{"id": "a", "subject": "x"}]})
-    assert brief.load_analysis(path).objects[0]["bbox"] is None
+    obj = brief.load_analysis(path).objects[0]
+    assert obj["bbox"] is None
+    # no bbox and no source, but a style_image present: the shape the
+    # fallback rule changed. source must be None, not the style_image.
+    assert obj["source"] is None
 
 
 def test_an_object_with_neither_bbox_nor_source_gets_no_picture_even_with_a_style_image():
