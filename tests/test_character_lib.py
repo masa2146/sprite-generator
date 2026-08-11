@@ -385,3 +385,52 @@ def test_the_brow_expression_param_moves_the_brow_decal():
     calm_brow = np.array([d[0] for d in calm[n_mouth:n_mouth + n_brow]])
     angry_brow = np.array([d[0] for d in angry[n_mouth:n_mouth + n_brow]])
     assert not np.allclose(calm_brow, angry_brow), "the brow decals must move"
+
+
+def test_the_mouth_expression_param_moves_the_mouth_decal():
+    """Same shape as the brow pinpoint test, same reason: FACE and ANGRY
+    also differ in `brow` and `eye_open`, so neither the render-level test
+    nor the brow test above would catch a bug that dropped `expr["mouth"]`
+    from the mouth stroke. build()'s mouth points reference `expr["mouth"]`
+    alone (not `brow` or `eye_open`), so reading just the mouth decals'
+    directions isolates it — the mouth stroke is the first one built
+    (`decals = mouth + brow + ...`), so its `samples=14` decals are
+    `calm[:14]`.
+    """
+    n_mouth = 14   # build()'s own stroke(..., samples=14) for the mouth
+    _, _, calm = demo_character.build(demo_character.FACE)
+    _, _, angry = demo_character.build(demo_character.ANGRY)
+    calm_mouth = np.array([d[0] for d in calm[:n_mouth]])
+    angry_mouth = np.array([d[0] for d in angry[:n_mouth]])
+    assert not np.allclose(calm_mouth, angry_mouth), "the mouth decals must move"
+
+
+def test_the_eye_open_expression_param_changes_the_eye_radius():
+    """Same shape again, for `eye_open`: neither the render test nor the
+    two decal tests above would catch a bug that hardcoded `r` in build()
+    instead of reading `expr["eye_open"]`, because they never look at the
+    eyes' geometry at all.
+
+    build() passes `r=r` (and `iris=r*0.5`, `pupil=r*0.25`) into `eye()`,
+    which places the sclera at `sclera_off = r*0.22` along `look` with its
+    own radius `sclera_r = r*0.92` — so the sclera's SDF sampled at the
+    fixed eye-socket centre `build()` itself uses, (-0.24, 0.10, 0.52),
+    reads exactly `sclera_off - sclera_r == -0.70*r`: linear in `r`, so a
+    changed `eye_open` (and nothing else, since this samples one fixed
+    world point) always changes this value. `surf.parts` is
+    `[head, left.sclera, left.iris, left.pupil, right.sclera, ...]` — index
+    1 is the left eye's sclera (mirroring the brow/mouth tests' reliance on
+    build()'s own composition order, not a render).
+
+    Measured for FACE (eye_open=1.0, r=0.17): -0.119. For ANGRY
+    (eye_open=0.7, r=0.119): -0.0833.
+    """
+    left_eye_centre = np.array([[-0.24, 0.10, 0.52]])
+    _, calm_surf, _ = demo_character.build(demo_character.FACE)
+    _, angry_surf, _ = demo_character.build(demo_character.ANGRY)
+    calm_sclera_sdf, calm_mat = calm_surf.parts[1]
+    angry_sclera_sdf, angry_mat = angry_surf.parts[1]
+    assert calm_mat.color == angry_mat.color == (250, 250, 255), "must be the sclera"
+    calm_r = float(calm_sclera_sdf(left_eye_centre)[0])
+    angry_r = float(angry_sclera_sdf(left_eye_centre)[0])
+    assert calm_r != angry_r, "eye_open must change the geometry the eye carries"
