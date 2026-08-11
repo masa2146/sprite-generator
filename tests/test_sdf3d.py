@@ -7,7 +7,7 @@ from PIL import Image
 
 import sdf3d
 from sdf3d import flat, render, sphere, squash, torus_z, torus_y, scale_y
-from sdf3d import material, surface, union, rounded_box
+from sdf3d import material, surface, union, rounded_box, spots, Surface
 from sdf3d import ramp_bands, ramp_linear
 from sdf3d import interior_edges
 
@@ -111,6 +111,30 @@ def test_a_surface_can_be_the_base_of_a_decal_stack():
                           ao=0.0, rim=0.0)).astype(int)
     green = ((a[..., 1] > 180) & (a[..., 0] < 120) & (a[..., 3] > 250)).sum()
     assert green > 0, "the decal never reached the surface"
+
+
+def test_spots_over_a_surface_keeps_each_parts_material():
+    """spots() used to wrap a Surface in a plain closure: render()'s
+    `isinstance(color, Surface)` check then failed for every decalled part,
+    which fell back to the scene-wide spec/shininess instead of its own.
+
+    Measured on this checkout: two parts sharing one colour, spec=0.0 vs
+    spec=1.0, rendered directly through a Surface (no decal) -> max channel
+    diff 77; the same pair wrapped in the pre-fix spots() closure -> diff 0,
+    bit-for-bit identical, because both parts silently got the same
+    scene-wide spec. This is the failure that made the demo character's own
+    eye materials (spec=0.35/0.30/0.20) do nothing.
+    """
+    dull = material((200, 200, 200), spec=0.0, shininess=40)
+    shiny = material((200, 200, 200), spec=1.0, shininess=40)
+    shape, surf = _two_balls(dull, shiny)
+    painted = spots(surf, [((0.0, 1.0, 0.0), 5.0, 1.0, (10, 240, 10))],
+                    center=(0.0, 0.0, 0.0))
+    assert isinstance(painted, Surface), "must stay a Surface"
+    a = np.asarray(_small(shape, color=painted, ao=0.0, rim=0.0)).astype(int)
+    lit = a[..., :3].max(axis=-1)
+    assert lit[:, 16:].max() > lit[:, :16].max() + 25, (
+        lit[:, :16].max(), lit[:, 16:].max())
 
 
 def test_ao_darkens_a_crease_more_than_a_flat_face():

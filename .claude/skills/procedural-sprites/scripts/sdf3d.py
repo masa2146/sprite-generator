@@ -498,13 +498,57 @@ class Surface:
         return base, spec, shin, rim, scol, hard
 
     def __call__(self, p, n):
-        """Colour only, so a Surface can be the base of spots(): face decals
-        paint over a body that already has materials."""
+        """Colour only. Kept for a caller that wants just the colour; spots()
+        no longer routes through this for a Surface base (see painted()) -
+        wrapping it in a plain closure was how a decalled part lost its own
+        spec/shininess/rim/spec_color/spec_hard down to the scene-wide
+        scalars."""
         return self.resolve(p, n)[0]
+
+    def painted(self, decals, center=(0, 0, 0)):
+        """The same decals spots() paints, but returning a Surface instead of
+        a bare colour closure - so render()'s `isinstance(color, Surface)`
+        check still finds a Surface afterwards and every part keeps its own
+        spec/shininess/rim/spec_color/spec_hard instead of falling back to
+        the scene-wide scalars.
+
+        Measured on this checkout: two parts with the same colour, one
+        spec=0.0 and one spec=1.0, rendered directly through a Surface ->
+        max channel diff 77 between them; the same pair wrapped in the old
+        spots() closure -> diff 0, because render() no longer saw a Surface
+        and used the scene-wide spec/shininess for both. This is the path
+        demo_character renders its whole turnaround through, so the eye
+        materials (spec=0.35/0.30/0.20) were doing nothing at all.
+        """
+        return Surface([
+            (sdf, material(_decal_color(m.color, decals, center),
+                           spec=m.spec, shininess=m.shininess, rim=m.rim,
+                           spec_color=m.spec_color, spec_hard=m.spec_hard))
+            for sdf, m in self.parts])
 
 
 def surface(parts):
     return Surface(parts)
+
+
+def _decal_color(base, decals, center):
+    """The colour-blend spots() applies, factored out so both the plain-
+    colour path (spots()) and the per-part path (Surface.painted()) share
+    one implementation instead of two copies drifting apart."""
+    C = np.array(center, float)
+    dd = [(np.array(d, float) / np.linalg.norm(d), r, s, np.array(c, float))
+          for d, r, s, c in decals]
+    def color(p, n):
+        c = base(p, n) if callable(base) else np.broadcast_to(
+            np.array(base, float), p.shape[:-1] + (3,)).copy()
+        v = p - C
+        v = v / (np.linalg.norm(v, axis=-1, keepdims=True) + 1e-9)
+        for dv, rad, soft, rgb in dd:
+            ang = np.degrees(np.arccos(np.clip(v @ dv, -1, 1)))
+            w = np.clip((rad - ang) / max(soft, 1e-3), 0, 1)[..., None]
+            c = c * (1 - w) + rgb * w
+        return c
+    return color
 
 
 def spots(base, decals, center=(0, 0, 0)):
@@ -515,18 +559,15 @@ def spots(base, decals, center=(0, 0, 0)):
     decals = [(direction(3,), radius_deg, soft_deg, rgb), ...] where
     direction points from `center` to the feature (e.g. +z face, eyes at
     (+-0.28, 0.05, 1)). Later decals paint over earlier ones (glints last).
+
+    A Surface base is dispatched to Surface.painted() instead of being
+    wrapped in a plain colour closure, so a body that already carries
+    per-part materials (hide vs. bone vs. metal, eyes with their own gloss)
+    keeps them once decals are painted over it - see painted()'s docstring
+    for what wrapping used to silently discard. A plain colour function (or
+    a flat rgb tuple) still gets a plain colour closure back, exactly as
+    before.
     """
-    C = np.array(center, float)
-    dd = [(np.array(d, float) / np.linalg.norm(d), r, s, np.array(c, float))
-          for d, r, s, c in decals]
-    def color(p, n):
-        c = base(p, n) if callable(c := base) else np.broadcast_to(
-            np.array(base, float), p.shape[:-1] + (3,)).copy()
-        v = p - C
-        v = v / (np.linalg.norm(v, axis=-1, keepdims=True) + 1e-9)
-        for dv, rad, soft, rgb in dd:
-            ang = np.degrees(np.arccos(np.clip(v @ dv, -1, 1)))
-            w = np.clip((rad - ang) / max(soft, 1e-3), 0, 1)[..., None]
-            c = c * (1 - w) + rgb * w
-        return c
-    return color
+    if isinstance(base, Surface):
+        return base.painted(decals, center)
+    return _decal_color(base, decals, center)
