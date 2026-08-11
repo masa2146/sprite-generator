@@ -173,10 +173,65 @@ def test_stroke_directions_follow_the_curve_not_cluster_at_one_end():
     assert np.linalg.norm(mid - last) > 0.05
 
 
-def test_stroke_handles_the_two_point_degenerate_case():
+def test_stroke_accepts_the_minimum_of_two_points():
+    """Two points is the smallest input stroke() must NOT raise on (below
+    that, test_stroke_rejects_a_single_point covers the ValueError). With
+    only one segment, `i` is clipped into the single-element range [0, 0] —
+    every other branch here is the same code the 3-point tests already
+    exercise, so this only pins the boundary of the length check itself."""
     out = stroke([(0.0, 0.0, 1.0), (0.3, 0.0, 1.0)], samples=5)
     assert len(out) == 5
     assert all(np.all(np.isfinite(d[0])) for d in out)
+
+
+def test_stroke_samples_are_weighted_by_arc_length_not_by_point_index():
+    """Equally-spaced control points cannot tell arc-length sampling from
+    sampling evenly per segment index -- both parameterisations give the
+    same output, which is exactly why the tests above (all equally spaced)
+    cannot see this. This fixture has one long segment and one short one,
+    so the two parameterisations diverge: arc-length sampling puts most
+    samples on the long segment, while per-index sampling would give the
+    short segment an equal share regardless of its real length -- the
+    "decals bunching wherever the control points happen to be dense" bug
+    the brief named `stroke` to prevent.
+    """
+    pts = [(0.0, -0.5, 1.0), (0.5, -0.5, 1.0), (0.5, -0.45, 1.0)]
+    p0, p1, p2 = (np.array(p) for p in pts)
+    long_len = np.linalg.norm(p1 - p0)
+    short_len = np.linalg.norm(p2 - p1)
+    assert long_len > 8 * short_len, "fixture must be genuinely uneven"
+
+    def unit(v):
+        return v / np.linalg.norm(v)
+
+    # Progress of a sampled direction along the chord from start to end, in
+    # the space stroke's output actually lives in (normalised directions) --
+    # a coordinate-free way to tell which segment a sample fell on without
+    # stroke exposing its internal `t`.
+    u0, u2 = unit(p0), unit(p2)
+    axis = u2 - u0
+    axis = axis / np.linalg.norm(axis)
+    boundary = np.dot(unit(p1) - u0, axis)
+
+    out = stroke(pts, samples=13)
+    prog = np.array([np.dot(np.array(d[0]) - u0, axis) for d in out])
+    on_long = int((prog < boundary).sum())
+    on_short = int((prog >= boundary).sum())
+    assert on_long > on_short, (on_long, on_short)
+
+
+def test_stroke_samples_from_the_first_point_toward_the_last():
+    """Reversing the sample order (first decal at the curve's END instead
+    of its start) passes every other stroke test here -- spots() only uses
+    list order for paint-over precedence, but the brief named ordering
+    alongside clustering, so it needs its own pin."""
+    pts = [(0.0, -0.3, 1.0), (0.3, 0.0, 1.0), (0.0, 0.3, 1.0)]
+    out = stroke(pts, samples=9)
+    first, last = np.array(out[0][0]), np.array(out[-1][0])
+    start = np.array(pts[0]); start = start / np.linalg.norm(start)
+    end = np.array(pts[-1]); end = end / np.linalg.norm(end)
+    assert np.linalg.norm(first - start) < np.linalg.norm(first - end)
+    assert np.linalg.norm(last - end) < np.linalg.norm(last - start)
 
 
 def test_stroke_handles_a_repeated_point_without_dividing_by_zero():
