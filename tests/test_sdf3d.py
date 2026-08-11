@@ -283,6 +283,28 @@ def test_buffers_come_back_at_the_final_size():
     assert np.isinf(depth[0, 0])           # a corner ray misses
 
 
+def test_buffers_are_decimated_back_down_at_the_real_oversample():
+    """The test above runs under `_small`, which pins OVERSAMPLE=1 - the
+    `if OVERSAMPLE > 1:` decimation branch in render() never executes
+    there, so deleting that branch entirely still leaves all 21 other
+    renderer tests (this module's whole suite, before this one) green. The
+    module's own default is 3 and SKILL.md says to keep it there, so this
+    pins the codepath every real caller actually hits. Not a repair - the
+    code was already correct here (buffers come back 32x32 at OVERSAMPLE
+    1, 2 and 3) - this is pinning that fact so it stays true."""
+    before = sdf3d.OVERSAMPLE
+    sdf3d.OVERSAMPLE = 3
+    try:
+        img, depth, normal = render(sphere(0.7), size=(16, 16), tilt=15,
+                                    color=flat((200, 200, 200)), buffers=True)
+    finally:
+        sdf3d.OVERSAMPLE = before
+    assert img.size == (16, 16)
+    assert depth.shape == (16, 16)
+    assert normal.shape == (16, 16, 3)
+    assert np.isinf(depth[0, 0])           # a corner ray misses
+
+
 def test_interior_edges_handles_an_all_miss_buffer():
     """A crop with nothing in it (every ray misses) is a legitimate input -
     an empty part, a box that rendered off-frame - not a caller error. It
