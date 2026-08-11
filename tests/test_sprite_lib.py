@@ -50,6 +50,11 @@ def test_the_contour_is_the_same_width_all_the_way_round():
         bot = on[on > 32]
         widths += [top.max() - top.min() + 1, bot.max() - bot.min() + 1]
     assert max(widths) - min(widths) <= 1, widths
+    # Equality-across-directions alone passed even when `width` measured
+    # supersampled pixels (ss=3, so a requested width of 3 drew a 1-final-px
+    # line everywhere -- uniformly wrong is still equal). Pin the absolute
+    # size too: width=3 must draw ~3 final pixels, not 1.
+    assert all(2 <= w <= 4 for w in widths), widths
 
 
 def test_the_subject_survives_under_the_contour():
@@ -81,12 +86,14 @@ def test_the_contour_is_the_same_width_on_the_diagonal_too():
     # circle: it reaches root-2 further along a diagonal boundary normal
     # than an axis-aligned one. Measured through this same function at
     # size=600/r=200/width=40 (a scale where single-pixel downsample
-    # quantization stops dominating): plain MaxFilter gave axis=13px,
-    # diagonal=18.38px, ratio 1.41 (root 2); the round dilate this helper
-    # actually uses (_plus_dilate/_square_dilate alternation, see
-    # _round_dilate) gives axis=13px, diagonal=14.14px, ratio 1.09. The 25%
-    # tolerance below sits comfortably above that 9% measured noise floor
-    # and comfortably below the 41% a square kernel misses by.
+    # quantization stops dominating), now that `width` converts to final
+    # pixels at the boundary (see contour()'s docstring): plain MaxFilter
+    # gives axis=40px, diagonal=56.57px, ratio 1.41 (root 2); the round
+    # dilate this helper actually uses (_plus_dilate/_square_dilate
+    # alternation, see _round_dilate) gives axis=40px, diagonal=42.43px,
+    # ratio 1.06. The 25% tolerance below sits comfortably above that 6%
+    # measured noise floor and comfortably below the 41% a square kernel
+    # misses by.
     size, r, width = 600, 200, 40
     out = np.asarray(contour(_disc(size, r), width=width, color=(20, 20, 40)))
     ink = (out[..., :3].sum(axis=-1) < 200) & (out[..., 3] > 128)
@@ -97,6 +104,11 @@ def test_the_contour_is_the_same_width_on_the_diagonal_too():
         _ray_width(ink, cx, cy, 1, 1),
     ]
     assert max(widths) / min(widths) <= 1.25, widths
+    # Absolute check, not just direction-to-direction equality: a `width`
+    # that meant supersampled pixels (the bug this fixes) would still pass
+    # the ratio assertion above -- uniformly wrong is still equal -- but
+    # would land near 40/3 ~= 13px here instead of 40.
+    assert all(35 <= w <= 45 for w in widths), widths
 
 
 def test_the_contour_stays_opaque_over_a_pre_softened_edge():

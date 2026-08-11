@@ -266,6 +266,18 @@ def _round_dilate(im, radius):
 def contour(img, width=2, color=(26, 26, 46), threshold=110, ss=3):
     """The set's dark outline, at one width the whole way round.
 
+    `width` is in FINAL pixels - the delivered sprite's own pixels, not the
+    `ss`-upsampled working image `_round_dilate` actually grows. Converting
+    at the boundary (multiply by `ss` before dilating, the image comes back
+    down by the same `ss` at the end) is what keeps that promise: dilating
+    by the raw `width` in supersampled space and then downsampling by `ss`
+    was silently dividing the visible line by `ss` too. Measured before this
+    fix, at the default ss=3: contour(width=2) -> 1 final px,
+    contour(width=3) -> 1 final px, contour(width=6) -> 2 final px,
+    contour(width=9) -> 3 final px - `demo_character` calls
+    `contour(img, width=2)` at 320px and shipped with, in effect, no visible
+    outline at all.
+
     The alpha is HARD-THRESHOLDED before it is grown. Dilating an
     anti-aliased alpha instead makes the line's width follow how soft the
     edge happens to be, which is why one asset's horn tips came out blurred
@@ -276,7 +288,7 @@ def contour(img, width=2, color=(26, 26, 46), threshold=110, ss=3):
     """
     big = img.resize((img.width*ss, img.height*ss), Image.LANCZOS)
     a = big.getchannel("A").point(lambda v: 255 if v > threshold else 0)
-    grown = _round_dilate(a, width)
+    grown = _round_dilate(a, round(width*ss))
     ring = ImageChops.subtract(grown, a)
     layer = Image.new("RGBA", big.size, tuple(color) + (0,))
     layer.putalpha(ring)
