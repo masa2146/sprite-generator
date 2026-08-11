@@ -44,15 +44,55 @@ Everything a job produces lives under `sprites-generated/<set>/`:
 Copy `scripts/sprite_lib.py`, `scripts/sdf3d.py` and `scripts/character_lib.py`
 from this skill into the set's `scripts/` on the first run. Copied, not
 imported from the skill: the set has to keep running months later, after the
-skill has moved on. Once copied, `from sprite_lib import *` in every asset
-script. It provides:
+skill has moved on. Once copied, `from sprite_lib import *` (and, for the
+soft-3D/character lanes, `from sdf3d import *` and `from character_lib import
+*`) in every asset script. Requires `pillow` and `numpy` only — exactly what
+the venv below installs. Between them the three files provide:
+
+`sprite_lib.py` — flat 2D drawing and delivery:
 `canvas/down` (supersampling), `vgrad/rgrad/fill_grad` (gradients),
 `rr_mask/ellipse_mask/poly_mask/union` (silhouettes), `sheen/inner_shadow/
 drop_shadow` (light accents), `shade_relief/apply_relief` (volume lighting),
 `sweep_straight/sweep_corner/piecewise_section` (tileables),
 `measure_section/dominant_colors` (reference measurement), `rotations`,
-`contact_sheet` (QC), `side_by_side` (reference comparison). Requires
-`pillow` and `numpy` only — exactly what the venv below installs.
+`contour` (the set's dark outline, one width the whole way round — `width`
+is in FINAL pixels, already converted from the internal supersample),
+`silhouette` (flat-filled shape check), `readability` (dark/pale/coverage
+pixel counts at on-screen size), `contact_sheet`/`qc_strip` (QC sheets),
+`side_by_side` (reference comparison).
+
+`sdf3d.py` — the orthographic SDF raymarcher (see "Soft-3D volumes" below
+for how to use it): primitives `sphere/rounded_box/capsule/cylinder_y/
+torus_y/torus_z` (`torus_z` stands facing the camera, unlike `torus_y` which
+lies flat and vanishes at `tilt=0`) and `squash`/`scale_y` (non-uniform
+scale of an SDF); combinators `union/smooth_union/subtract/intersect`;
+`render()` (the raymarcher itself — pass `buffers=True` to also get back the
+per-pixel `depth`/`normal` the march already computed, at the same final
+size as the image); `interior_edges(depth, normal)` (lines where one part
+crosses another, from those buffers — the one thing an alpha `contour()`
+cannot draw); materials via `material()`/`surface()`/`Surface` (per-part
+colour AND spec/shininess/rim/spec_color/spec_hard — see "Soft-3D volumes");
+`spots()` (object-space decals, dispatches to `Surface.painted()` when the
+base already carries per-part materials, so decals never collapse a body's
+materials down to the scene-wide scalars); shading ramps `ramp_linear()`
+(the default arithmetic response) and `ramp_bands(thresholds)` (cel
+quantisation).
+
+`character_lib.py` — the character-specific parts `sdf3d` has no opinion
+about: `eye()` builds a socket/whites/iris/pupil/glint as real geometry
+(returned as an `Eye` with `.socket`, `.parts`, `.decals`) and needs a
+`head_center` matching whatever centre you later pass to `spots()`, so its
+glint decal's direction is built in the same global frame `spots()`
+measures angles in — not the eye's own `look` frame. `stroke(points)`
+samples a curve (arc-length weighted) into a line of decals, for mouths and
+brows. `mirrored(fn)` folds an SDF onto `|x|` for one-sided-to-symmetric
+parts; `mirror_decals(decals)` does the same for a decal list. `light_for
+(yaw, base_light)` rotates the set's light with the camera yaw, so a
+turnaround's back view isn't lit from behind the object; `turnaround(shape,
+views=VIEWS, ...)` renders one shape at every named yaw with the light
+turned to match. `VIEWS` is the front/three_quarter/side/back naming
+convention `turnaround` defaults to — an opinion about file naming, not
+about anatomy.
 
 Every Python run goes through the workspace venv — never the system
 interpreter, whose packages are not this project's business:
@@ -178,9 +218,15 @@ wrong inside a `smooth_union`'s blend band, where the surface belongs to
 neither part.
 
 `spec_hard=<0..1>` turns the highlight into the flat, hard-edged patch a cel
-look wants; leaving it out keeps the continuous falloff. Banded diffuse is a
-ramp you hand in: `ramp_bands([0.35, 0.75])` against the default
-`ramp_linear()`.
+look wants; leaving it out keeps the continuous falloff. It also wants a much
+LOWER `shininess` than the default 40 — the exponent used for the gate is
+`shininess**2` (squared, on purpose — see the comment beside it in
+`sdf3d.render`), so the default needs `N·H > 0.99957` to fire at all. Measured
+on a 256px sphere with `spec_hard=0.5`: `shininess=40` gives a highlight
+around 20px, `20` around 80px, `12` around 200px, `5` around 1000px. Set
+`shininess` in roughly the 5–12 range when using `spec_hard`; the default
+alone reads as "the feature does nothing." Banded diffuse is a ramp you hand
+in: `ramp_bands([0.35, 0.75])` against the default `ramp_linear()`.
 
 ## Characters: a routing ladder, not one technique
 
@@ -191,24 +237,35 @@ in this order:
    sets): those ARE the masters. Don't redraw them — normalize (alpha, size,
    fill ratio) and derive recolors/variants in code.
 2. **Blob-class character** (rounded body + simple appendages + flat kawaii
-   face): the SDF lane handles it. Build the body with `smooth_union` of
-   spheres/capsules, render each view with the `yaw` parameter (turntable —
-   consistency across views is by construction). Two hard rules: facial
+   face): the SDF lane handles it, via `character_lib.py` (see "Setup" above
+   for its full export list). Build the body with `smooth_union` of
+   spheres/capsules, then render every named view at once with
+   `turnaround(shape, views=VIEWS, ...)` rather than looping `yaw` by hand —
+   it calls `light_for(yaw)` for you, so the light turns with the camera and
+   the back view isn't lit from behind the object. Two hard rules: facial
    features and inner-ear type markings go on as OBJECT-SPACE decals
    (`spots()` — they rotate and occlude with the head; screen-space stickers
    are exactly what breaks 3/4 and side views), and sub-part materials come
    from `surface()`/`material()` (see "Soft-3D volumes" above), not from
-   geometry hacks.
+   geometry hacks. `spots()` keeps those materials even when decalling a
+   `Surface` that already has them — it hands the base to
+   `Surface.painted()` rather than collapsing it to one colour.
 
-   Four of the things that used to have to be checked by hand are now the
-   library's: an eye is `eye()` and comes with a white, an iris and a pupil;
-   `surface()` gives hide, bone and metal their own gloss instead of one
-   plastic sheen; the five-tap AO darkens a join so parts read as joined;
-   and `contour()` holds one width the whole way round. What is still yours
-   to get right is everything the library has no opinion about — proportion,
-   where the muzzle sits, whether the plinth is smaller than the head, and
-   whether the silhouette says what the thing is when you fill it black
-   (`silhouette()` draws it; you decide).
+   Five of the things that used to have to be checked by hand are now the
+   library's: an eye is `eye()` and comes with a white, an iris and a pupil
+   (pass it the SAME `head_center` you'll later pass to `spots()` — its
+   glint decal's direction is built in that global frame, not the eye's own
+   `look` direction, or it lands off the eye entirely); a mouth or brow is
+   `stroke(points)` sampling a curve into decals instead of hand-placed
+   tuples, and `mirrored()`/`mirror_decals()` give a one-sided part or decal
+   list its other half; `surface()` gives hide, bone and metal their own
+   gloss instead of one plastic sheen; the five-tap AO darkens a join so
+   parts read as joined; and `contour()` holds one width the whole way
+   round, in final pixels. What is still yours to get right is everything
+   the library has no opinion about — proportion, where the muzzle sits,
+   whether the plinth is smaller than the head, and whether the silhouette
+   says what the thing is when you fill it black (`silhouette()` draws it;
+   you decide).
 
    A brow that should shade the eye under it has to be GEOMETRY. A flat decal
    brow cannot cast anything, and `shadow=True` is what makes the contact
