@@ -27,19 +27,25 @@ poses, photorealism. For those, generate one clean master with an image model,
 then still do variants, rotations and recolors in code. Say so honestly rather
 than producing a bad procedural approximation.
 
+Hair, cloth folds and painted faces are not in this lane and will not be:
+they need strands, simulation and texture, none of which an analytic SDF
+gives. Say so plainly rather than shipping a plastic approximation — the
+brief's prompt section exists for exactly these.
+
 ## Setup: the workspace and its venv
 
 Everything a job produces lives under `sprites-generated/<set>/`:
 
     brief/    analysis.json · review.html · refs/
-    scripts/  style.py · <asset>.py · sprite_lib.py + sdf3d.py (copied here)
+    scripts/  style.py · <asset>.py · sprite_lib.py + sdf3d.py + character_lib.py (copied here)
     out/      the sprites themselves
     qc/       _qc_sheet.png · cmp_<id>.png
 
-Copy `scripts/sprite_lib.py` and `scripts/sdf3d.py` from this skill into the
-set's `scripts/` on the first run. Copied, not imported from the skill: the
-set has to keep running months later, after the skill has moved on. Once
-copied, `from sprite_lib import *` in every asset script. It provides:
+Copy `scripts/sprite_lib.py`, `scripts/sdf3d.py` and `scripts/character_lib.py`
+from this skill into the set's `scripts/` on the first run. Copied, not
+imported from the skill: the set has to keep running months later, after the
+skill has moved on. Once copied, `from sprite_lib import *` in every asset
+script. It provides:
 `canvas/down` (supersampling), `vgrad/rgrad/fill_grad` (gradients),
 `rr_mask/ellipse_mask/poly_mask/union` (silhouettes), `sheen/inner_shadow/
 drop_shadow` (light accents), `shade_relief/apply_relief` (volume lighting),
@@ -163,6 +169,19 @@ a recessed coin face is `subtract(coin, thin_cylinder)` — so iterate with
 the same side-by-side compare loop as everything else. Typical render cost
 is a few seconds per asset; keep `OVERSAMPLE=3`.
 
+Materials carry a part's colour AND its surface — `material(colour, spec=,
+shininess=, rim=, spec_hard=)`, collected with `surface([(sdf, material), ...])`.
+One rule governs how you build the shape underneath them: **blend softly only
+within one material, and hard-union anything that needs its own.** The material
+at a surface point is the nearest part's, which is exact for a hard union and
+wrong inside a `smooth_union`'s blend band, where the surface belongs to
+neither part.
+
+`spec_hard=<0..1>` turns the highlight into the flat, hard-edged patch a cel
+look wants; leaving it out keeps the continuous falloff. Banded diffuse is a
+ramp you hand in: `ramp_bands([0.35, 0.75])` against the default
+`ramp_linear()`.
+
 ## Characters: a routing ladder, not one technique
 
 Characters are where procedural drawing has a real boundary — route by case,
@@ -178,14 +197,22 @@ in this order:
    features and inner-ear type markings go on as OBJECT-SPACE decals
    (`spots()` — they rotate and occlude with the head; screen-space stickers
    are exactly what breaks 3/4 and side views), and sub-part materials come
-   from `part_color()`, not from geometry hacks.
+   from `surface()`/`material()` (see "Soft-3D volumes" above), not from
+   geometry hacks.
 
-   Known ceiling, measured on a bull totem: parts stacked instead of blended,
-   a face made of screen-space stickers, no contact occlusion at the joins,
-   one plastic material for hide, bone and metal alike, and a silhouette so
-   symmetric it does not read when filled black. A `character_lib` that fixes
-   these by construction is specified separately; until it lands, check each
-   of them by hand.
+   Four of the things that used to have to be checked by hand are now the
+   library's: an eye is `eye()` and comes with a white, an iris and a pupil;
+   `surface()` gives hide, bone and metal their own gloss instead of one
+   plastic sheen; the five-tap AO darkens a join so parts read as joined;
+   and `contour()` holds one width the whole way round. What is still yours
+   to get right is everything the library has no opinion about — proportion,
+   where the muzzle sits, whether the plinth is smaller than the head, and
+   whether the silhouette says what the thing is when you fill it black
+   (`silhouette()` draws it; you decide).
+
+   A brow that should shade the eye under it has to be GEOMETRY. A flat decal
+   brow cannot cast anything, and `shadow=True` is what makes the contact
+   darkening appear once it is.
 3. **Full characters, animation, many poses**: leave 2D code. Best practice
    is a 3D master — generate a mesh from the front view with an image-to-3D
    model (e.g. Microsoft TRELLIS, open source) or model it once in Blender,

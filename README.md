@@ -14,6 +14,10 @@ cut out locally.
 | [`image-style`](.claude/skills/image-style/SKILL.md) | resolves the whole set's look into six fields — `render`, `camera`, `lighting`, `palette`, `linework`, `realism` |
 | [`procedural-sprites`](.claude/skills/procedural-sprites/SKILL.md) | writes the Python that draws each sprite |
 
+`procedural-sprites` draws geometry, not texture: hair, cloth folds and
+painted faces are not in its lane and will not be — those still come from
+the hand-generation path below.
+
 Ask Claude Code to use `sprite-brief` with whatever you have — a screenshot, a
 folder of pictures, or just a description of what you want. It calls
 `image-style` for you, and hands off to `procedural-sprites` (or to the
@@ -110,7 +114,7 @@ Everything a job produces lives under `sprites-generated/<set>/`, gitignored:
 
 ```
 brief/    analysis.json · review.html · refs/
-scripts/  style.py · <asset>.py · sprite_lib.py + sdf3d.py (copied in, not imported)
+scripts/  style.py · <asset>.py · sprite_lib.py + sdf3d.py + character_lib.py (copied in, not imported)
 out/      the sprites themselves
 qc/       _qc_sheet.png · cmp_<id>.png
 ```
