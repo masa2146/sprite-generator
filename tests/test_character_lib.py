@@ -5,6 +5,7 @@ import sdf3d
 from sdf3d import flat, material, render, sphere, smooth_union, surface, union
 
 from character_lib import VIEWS, eye, light_for, mirror_decals, mirrored, stroke, turnaround
+import demo_character
 
 
 def _small(sdf, size=(48, 48), **kw):
@@ -319,3 +320,68 @@ def test_every_view_is_lit_from_the_same_side_of_the_character():
         left = _brightest_opaque(im, slice(0, 16))
         right = _brightest_opaque(im, slice(16, 32))
         assert left > right, (name, left, right)
+
+
+def test_an_expression_is_a_dict_the_asset_merges():
+    """No rig and no class hierarchy: the library takes numbers, and an
+    expression is the dict of numbers you hand it."""
+    assert demo_character.ANGRY["brow"] != demo_character.FACE["brow"]
+    assert set(demo_character.ANGRY) == set(demo_character.FACE)
+
+
+def test_the_two_expressions_render_differently():
+    """A bare `not array_equal` would pass for almost any unrelated change —
+    a recolour, a rounding tweak anywhere in the render path — so it would
+    not fail if `build()` stopped reading `expr["brow"]`/`expr["mouth"]` at
+    all and just drew a fixed face. Render large enough that the decals
+    cover more than a handful of pixels (at 48x48/OVERSAMPLE=1 the eye task
+    found a decal can cover ZERO — see the pupil finding), then check two
+    more specific things instead: the rows that differ stay confined to the
+    face (not the whole frame, which is what a global-recolour bug would
+    produce), and the opaque pixel COUNT (the silhouette) is untouched —
+    decals paint over an existing body, they do not resize the head.
+
+    Measured at size (160, 160) before picking the bounds below: the diff
+    rows run 37..120 (a first guess of `< 0.75*160 == 120` failed on that
+    exact boundary — not a code bug, see the task report) and silhouette
+    coverage is 5932 opaque pixels for BOTH expressions, an exact 0 delta.
+    The bounds here keep margin around those measured numbers so a real
+    face-decal regression trips them without the test being pixel-exact.
+    """
+    calm = np.asarray(demo_character.render_one(demo_character.FACE, yaw=0,
+                                                  size=(160, 160)))
+    angry = np.asarray(demo_character.render_one(demo_character.ANGRY, yaw=0,
+                                                   size=(160, 160)))
+    assert not np.array_equal(calm, angry)
+
+    diff_rows = np.where(np.any(calm != angry, axis=(1, 2)))[0]
+    assert diff_rows.size > 0, "the two expressions must draw different pixels"
+    assert 15 < diff_rows.min() and diff_rows.max() < 140, (
+        "the difference must stay confined to the face (brow/mouth/eye "
+        "decals and geometry), not spread to the top of the head or the "
+        "bottom of the frame", diff_rows.min(), diff_rows.max())
+
+    calm_cov = int((calm[..., 3] > 200).sum())
+    angry_cov = int((angry[..., 3] > 200).sum())
+    assert abs(calm_cov - angry_cov) <= 10, (
+        "the silhouette (head outline) must stay put — only the face "
+        "decals should move", calm_cov, angry_cov)
+
+
+def test_the_brow_expression_param_moves_the_brow_decal():
+    """Pinpoint check, independent of the pixel test above: FACE and ANGRY
+    also differ in `mouth` and `eye_open`, so a render-level diff cannot
+    tell a `brow` regression apart from those two still working — a bug
+    that dropped `expr["brow"]` from the brow stroke entirely would still
+    leave the render test above green. This calls build() directly and
+    reads the BROW decals' own directions, sliced out by the composition
+    order build() documents (`decals = mouth + brow + mirror_decals(brow) +
+    left.decals + right.decals`) using the mouth/brow strokes' own
+    `samples=` counts from build()'s source.
+    """
+    n_mouth, n_brow = 14, 8   # build()'s own stroke(..., samples=...) counts
+    _, _, calm = demo_character.build(demo_character.FACE)
+    _, _, angry = demo_character.build(demo_character.ANGRY)
+    calm_brow = np.array([d[0] for d in calm[n_mouth:n_mouth + n_brow]])
+    angry_brow = np.array([d[0] for d in angry[n_mouth:n_mouth + n_brow]])
+    assert not np.allclose(calm_brow, angry_brow), "the brow decals must move"
