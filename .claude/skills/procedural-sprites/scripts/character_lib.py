@@ -10,7 +10,11 @@ import math
 
 import numpy as np
 
-from sdf3d import material, sphere
+from sdf3d import LIGHT, material, render, sphere
+
+# Convention for turnaround file naming, not an art direction: the library
+# gives no opinion on which angles a character set actually needs.
+VIEWS = {"front": 0, "three_quarter": 38, "side": 82, "back": 180}
 
 
 class Eye:
@@ -145,3 +149,35 @@ def mirrored(fn):
 def mirror_decals(decals):
     """The same decals on the other side of x."""
     return [((-d[0][0], d[0][1], d[0][2]),) + tuple(d[1:]) for d in decals]
+
+
+def light_for(yaw, base_light=LIGHT):
+    """Turn the light with the camera so it stays on the character's upper
+    left in every view.
+
+    A world-fixed light is physically right and useless here: at yaw 180 it
+    falls entirely behind the object and the back view comes out flat
+    ambient mush. Every other asset in a set is lit from the upper left, so
+    rotating the light by the same yaw as the camera is what keeps a
+    turnaround matching the rest of the set. This is the same rotation
+    `render` applies to its camera basis (see sdf3d.render's `roty`), so the
+    light stays fixed relative to the camera, not the object.
+    """
+    a = math.radians(yaw)
+    c, s = math.cos(a), math.sin(a)
+    lx, ly, lz = base_light
+    return (c*lx + s*lz, ly, -s*lx + c*lz)
+
+
+def turnaround(shape, views=VIEWS, light=None, **render_kw):
+    """One shape, every named view, each lit to match the others.
+
+    Consistency across views is by construction: it is the same object at a
+    different camera yaw, not the same character drawn again. Does not touch
+    `sdf3d.OVERSAMPLE` — a caller that wants a small/fast render sets that
+    itself, the way `_small` does in the tests.
+    """
+    base = light if light is not None else LIGHT
+    return {name: render(shape, yaw=yaw, light=light_for(yaw, base),
+                         **render_kw)
+            for name, yaw in views.items()}

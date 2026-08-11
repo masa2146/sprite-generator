@@ -2,9 +2,9 @@
 import numpy as np
 
 import sdf3d
-from sdf3d import material, render, sphere, smooth_union, surface, union
+from sdf3d import flat, material, render, sphere, smooth_union, surface, union
 
-from character_lib import eye, mirror_decals, mirrored, stroke
+from character_lib import VIEWS, eye, light_for, mirror_decals, mirrored, stroke, turnaround
 
 
 def _small(sdf, size=(48, 48), **kw):
@@ -272,3 +272,50 @@ def test_mirror_decals_flips_x_and_keeps_the_rest():
     out = mirror_decals(src)
     assert out[0][0][0] == -0.3
     assert out[0][1:] == src[0][1:]
+
+
+def test_the_light_turns_with_the_camera():
+    """A world-fixed light is physically right and useless here: at yaw 180
+    it falls entirely behind the object and the back view comes out flat
+    ambient mush."""
+    base = (-0.35, 0.75, 0.55)
+    assert light_for(0, base) == base
+    turned = light_for(180, base)
+    assert abs(turned[0] + base[0]) < 1e-9
+    assert abs(turned[1] - base[1]) < 1e-9
+
+
+def test_a_turnaround_renders_every_named_view():
+    out = turnaround(sphere(0.6), views={"front": 0, "side": 82},
+                     size=(24, 24), color=flat((200, 160, 40)), ao=0.0)
+    assert set(out) == {"front", "side"}
+    assert all(im.size == (24, 24) for im in out.values())
+
+
+def _brightest_opaque(im, cols):
+    """Sum of RGB, restricted to fully-opaque pixels only, over a column
+    slice.
+
+    A plain `rgb.sum()` picks up Lanczos ringing at the silhouette's
+    semi-transparent edge: `render`'s downsample can overshoot a colour
+    channel to 255 at an alpha~1 rim pixel that carries almost no real
+    coverage (measured: alpha=1 pixel valued (255,255,255) at a sphere's
+    edge). That ringing sits on both halves regardless of where the light
+    is, so it drowns the actual shading signal below and left==right on
+    every view even for a correctly-rotated light. Masking to alpha==255
+    (fully covered, no rim) leaves only real shaded surface behind.
+    """
+    a = np.asarray(im)
+    rgb = a[..., :3].astype(int).sum(axis=-1)
+    opaque = a[..., 3] == 255
+    return np.where(opaque[:, cols], rgb[:, cols], -1).max()
+
+
+def test_every_view_is_lit_from_the_same_side_of_the_character():
+    """The measurable version of the rule: the lit half stays the lit half."""
+    out = turnaround(sphere(0.6), views=VIEWS, size=(32, 32),
+                     color=flat((200, 200, 200)), ao=0.0, rim=0.0, spec=0.0)
+    for name, im in out.items():
+        left = _brightest_opaque(im, slice(0, 16))
+        right = _brightest_opaque(im, slice(16, 32))
+        assert left > right, (name, left, right)
