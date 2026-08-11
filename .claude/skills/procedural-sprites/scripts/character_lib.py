@@ -45,12 +45,46 @@ def eye(center, look, r=0.09, iris=0.045, pupil=0.022, glint=0.018,
     d = d / (np.linalg.norm(d) + 1e-9)
 
     socket = sphere(r, tuple(c))
-    parts = [(sphere(r*0.92, tuple(c + d*0.02)), material(sclera, spec=0.35,
-                                                          shininess=60))]
+
+    # Each part is a sphere nested along `look`; only its front CAP (offset
+    # from centre + its own radius) can ever reach the camera, so a part is
+    # visible at all only where its cap sits strictly beyond the cap of the
+    # part behind it -- Surface picks whichever part's SDF reads nearest to
+    # zero, and a part whose cap doesn't clear the one behind it never wins
+    # a single ray no matter how it's coloured. The old r*0.80/r*0.88
+    # offsets did not enforce this: they gave the pupil a cap *behind* the
+    # iris's for both the module's defaults and its own test values
+    # (measured: 0 of ~330k raymarched hits ever resolved to the pupil).
+    # Below, every offset is instead solved from
+    #     offset_of_part_in_front = previous_cap + MARGIN - own_radius
+    # so the next person changing a radius is working against a stated
+    # clearance, not a render that happened to look right.
+    #
+    # MARGIN scales with r, and so does every offset (the old sclera offset
+    # was the fixed distance `d*0.02` while iris/pupil scaled with r; a
+    # caller doubling r got a socket and iris that doubled but a sclera
+    # bulge that didn't move -- self-similarity broke exactly where a caller
+    # was most likely to test it).
+    MARGIN = 0.15 * r
+
+    sclera_r = r * 0.92
+    sclera_off = r * 0.22
+    cap = sclera_off + sclera_r
+    parts = [(sphere(sclera_r, tuple(c + d*sclera_off)),
+              material(sclera, spec=0.35, shininess=60))]
+
     if iris > 0:
-        parts.append((sphere(iris, tuple(c + d*(r*0.80))),
+        cap += MARGIN
+        iris_off = cap - iris          # cap == iris_off + iris, by construction
+        parts.append((sphere(iris, tuple(c + d*iris_off)),
                       material(iris_color, spec=0.30, shininess=50)))
-    parts.append((sphere(max(pupil, 1e-4), tuple(c + d*(r*0.88))),
+
+    # No iris to protrude past (the dot-eye fallback) leaves `cap` at the
+    # sclera's, so the pupil clears the sclera directly instead.
+    cap += MARGIN
+    pupil_r = max(pupil, 1e-4)
+    pupil_off = cap - pupil_r
+    parts.append((sphere(pupil_r, tuple(c + d*pupil_off)),
                   material(pupil_color, spec=0.20, shininess=40)))
 
     decals = []
