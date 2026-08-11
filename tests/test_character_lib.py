@@ -4,7 +4,7 @@ import numpy as np
 import sdf3d
 from sdf3d import material, render, sphere, smooth_union, surface, union
 
-from character_lib import eye
+from character_lib import eye, mirror_decals, mirrored, stroke
 
 
 def _small(sdf, size=(48, 48), **kw):
@@ -146,3 +146,74 @@ def test_zeroed_parameters_give_a_plain_dot_eye():
     e = eye((0.0, 0.0, 0.6), (0.0, 0.0, 1.0), iris=0.0, glint=0.0)
     assert len(e.parts) == 2            # sclera and pupil only
     assert e.decals == []
+
+
+def test_a_stroke_samples_the_curve_into_decals():
+    """A mouth used to be twenty hand-written decal tuples in the asset."""
+    pts = [(0.0, -0.2, 1.0), (0.2, -0.4, 1.0), (0.4, -0.2, 1.0)]
+    out = stroke(pts, samples=12)
+    assert len(out) == 12
+    assert all(len(d) == 4 for d in out)
+    first = np.array(out[0][0])
+    assert abs(np.linalg.norm(first) - 1.0) < 1e-6   # directions are unit
+
+
+def test_stroke_directions_follow_the_curve_not_cluster_at_one_end():
+    """Unit-length alone is true for ANY direction, including twelve copies
+    of the same one — it would pass even if stroke sampled only points[0].
+    This pins that the samples actually spread along the curve: the first,
+    middle and last directions of a bent path must differ from each other,
+    not just each be a unit vector."""
+    pts = [(0.0, -0.3, 1.0), (0.3, 0.0, 1.0), (0.0, 0.3, 1.0)]
+    out = stroke(pts, samples=9)
+    dirs = np.array([d[0] for d in out])
+    first, mid, last = dirs[0], dirs[len(dirs) // 2], dirs[-1]
+    assert np.linalg.norm(first - last) > 0.2
+    assert np.linalg.norm(mid - first) > 0.05
+    assert np.linalg.norm(mid - last) > 0.05
+
+
+def test_stroke_handles_the_two_point_degenerate_case():
+    out = stroke([(0.0, 0.0, 1.0), (0.3, 0.0, 1.0)], samples=5)
+    assert len(out) == 5
+    assert all(np.all(np.isfinite(d[0])) for d in out)
+
+
+def test_stroke_handles_a_repeated_point_without_dividing_by_zero():
+    """A zero-length first segment (seg[i] == 0) must not produce a NaN
+    direction — the caller may pass a repeated anchor point on purpose,
+    e.g. to hold the curve still at a corner."""
+    pts = [(0.0, 0.0, 1.0), (0.0, 0.0, 1.0), (0.3, 0.0, 1.0)]
+    out = stroke(pts, samples=6)
+    assert len(out) == 6
+    assert all(np.all(np.isfinite(d[0])) for d in out)
+
+
+def test_stroke_rejects_a_single_point():
+    try:
+        stroke([(0.0, 0.0, 1.0)])
+        assert False, "stroke must refuse fewer than two points"
+    except ValueError:
+        pass
+
+
+def test_mirrored_evaluates_at_the_absolute_x():
+    """mirrored's job is to fold -x onto +x before evaluating — that only
+    means anything if the raw shape actually differs between +x and -x, so
+    this pins the fixture's asymmetry before trusting the after-mirroring
+    equality below."""
+    base = sphere(0.2, (0.5, 0.0, 0.0))
+    p = np.array([[0.5, 0.0, 0.0], [-0.5, 0.0, 0.0]])
+    raw = base(p)
+    assert abs(raw[0] - raw[1]) > 0.5, "fixture must be asymmetric about x"
+
+    f = mirrored(base)
+    d = f(p)
+    assert abs(d[0] - d[1]) < 1e-9
+
+
+def test_mirror_decals_flips_x_and_keeps_the_rest():
+    src = [((0.3, 0.1, 0.9), 8.0, 1.0, (10, 20, 30))]
+    out = mirror_decals(src)
+    assert out[0][0][0] == -0.3
+    assert out[0][1:] == src[0][1:]

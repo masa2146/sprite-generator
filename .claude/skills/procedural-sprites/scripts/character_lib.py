@@ -94,3 +94,54 @@ def eye(center, look, r=0.09, iris=0.045, pupil=0.022, glint=0.018,
         decals.append((tuple(gd / (np.linalg.norm(gd) + 1e-9)),
                        math.degrees(glint*8), 0.7, glint_color))
     return Eye(socket, parts, decals)
+
+
+def stroke(points, radius_deg=2.3, soft_deg=0.9, color=(0, 0, 0), samples=16):
+    """A line of decals along a curve through `points`.
+
+    A mouth used to be twenty hand-placed decal tuples in one asset's
+    script; this samples the curve instead of asking a caller to place
+    each dot itself.
+
+    Piecewise-linear resampling on purpose: a caller that wants a bezier
+    passes its own sampled points, and this stays the one thing it says it
+    is. Directions are normalised because spots() measures the angle from
+    the decal's direction to the surface point.
+    """
+    pts = np.array(points, float)
+    if len(pts) < 2:
+        raise ValueError("stroke needs at least two points")
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    want = np.linspace(0.0, cum[-1], samples)
+    out = []
+    for w in want:
+        i = int(np.clip(np.searchsorted(cum, w) - 1, 0, len(seg) - 1))
+        # A repeated point makes seg[i] == 0 (zero-length segment); t falls
+        # back to 0 so p is just pts[i] instead of a 0/0 division.
+        t = 0.0 if seg[i] == 0 else (w - cum[i]) / seg[i]
+        p = pts[i] + (pts[i+1] - pts[i])*t
+        out.append((tuple(p / (np.linalg.norm(p) + 1e-9)), radius_deg,
+                    soft_deg, color))
+    return out
+
+
+def mirrored(fn):
+    """Evaluate an SDF at |x|, so one definition gives both sides.
+
+    Offered, not imposed: a caller wanting a symmetric face wraps a
+    one-sided part once instead of writing it twice. But it is a helper,
+    never a rule — one character in this project has ears at deliberately
+    different depths, so the side view shows two of them instead of one
+    perfectly overlapping spike. Symmetry is the asset's choice; nothing
+    here should force it.
+    """
+    def f(p):
+        q = np.stack([np.abs(p[..., 0]), p[..., 1], p[..., 2]], axis=-1)
+        return fn(q)
+    return f
+
+
+def mirror_decals(decals):
+    """The same decals on the other side of x."""
+    return [((-d[0][0], d[0][1], d[0][2]),) + tuple(d[1:]) for d in decals]
