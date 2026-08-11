@@ -129,6 +129,40 @@ def test_the_contour_stays_opaque_over_a_pre_softened_edge():
     assert soft_darkest < 200, soft_darkest
 
 
+def _thin_dark_stripe(size=(440, 520), stripe_w=20, bg=(160, 160, 160)):
+    """A vertical dark stripe over a mid-tone background (min channel 160,
+    under the pale floor of 170; max channel 160, over the dark ceiling of
+    90 -- the background itself registers as neither). Fully opaque, so
+    readability's alpha gate never hides it. Sized so the stripe survives
+    LANCZOS-shrinking to 44x52 but is diluted into the background at 8x8 --
+    readability's whole claim is "what survives the shrink to size", and a
+    fixture that doesn't depend on `size` (a disc, a flat colour) can't
+    tell a broken resize from a working one."""
+    w, h = size
+    a = np.full((h, w, 4), 255, np.uint8)
+    a[..., :3] = bg
+    cx = w // 2
+    a[:, cx - stripe_w // 2:cx + stripe_w // 2, :3] = 0
+    return Image.fromarray(a, "RGBA")
+
+
+def test_readability_dark_count_moves_with_size():
+    """`dark` is never asserted by the disc-based test below (only `pale
+    == 0` and `0 < coverage < 1`, which a mid-toned disc satisfies under
+    any implementation) -- a stub that swapped `img.resize(size, LANCZOS)`
+    for plain `np.asarray(img)` (ignoring `size` entirely) or that
+    hardcoded `dark=0` both passed every prior readability test. This
+    fails on both: the stripe must show up as dark pixels once shrunk to
+    44x52 (proving `dark` isn't hardcoded to 0) and must NOT show up once
+    shrunk further to 8x8 (proving the shrink actually used `size`, not a
+    size-independent copy of the source)."""
+    img = _thin_dark_stripe()
+    big = readability(img, size=(44, 52))
+    small = readability(img, size=(8, 8))
+    assert big["dark"] > 0, big
+    assert small["dark"] == 0, small
+
+
 def test_readability_counts_dark_and_pale_pixels_at_game_size():
     # _disc fills with (220, 90, 60) -- min channel 60, well under the
     # pale floor of 170, so this disc can never register as pale pixels.
