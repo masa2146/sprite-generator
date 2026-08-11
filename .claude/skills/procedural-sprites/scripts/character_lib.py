@@ -37,12 +37,23 @@ class Eye:
 
 def eye(center, look, r=0.09, iris=0.045, pupil=0.022, glint=0.018,
         sclera=(250, 250, 255), iris_color=(60, 40, 30),
-        pupil_color=(20, 18, 28), glint_color=(255, 255, 255)):
+        pupil_color=(20, 18, 28), glint_color=(255, 255, 255),
+        head_center=(0, 0, 0)):
     """An eye as geometry: a socket bulge, a white, an iris, a pupil, a glint.
 
     Flat dark shapes stuck on a face read as part of the brow above them —
     the whites are what make a character look back at you. Setting iris to 0
     drops it and gives a plain dot eye, so this does not force a style.
+
+    head_center: the centre a caller will pass to spots() for the whole
+    face (the head's centre, not this eye's). The glint decal's direction
+    has to be built from THAT point, not from `center` or `look` alone —
+    spots() measures every decal's angle from one global centre, and a
+    direction built in the eye's own local frame lands wherever that frame
+    happens to point in the global one, not on the eye. Defaults to the
+    origin, which is right for a caller whose head is centred there (as
+    `demo_character`'s is, near enough); a caller with an off-centre head
+    should pass its own centre through.
     """
     c = np.array(center, float)
     d = np.array(look, float)
@@ -93,10 +104,36 @@ def eye(center, look, r=0.09, iris=0.045, pupil=0.022, glint=0.018,
 
     decals = []
     if glint > 0:
+        # spots() measures every decal's angle from ONE GLOBAL centre (the
+        # `center` a caller later passes to spots(), typically the whole
+        # head) - not from this eye's own centre. The old code built the
+        # glint's direction as `look + nudge` and stopped, which is a
+        # direction in the EYE's frame: for the demo's own left eye
+        # (head_center (0, 0.10, 0), eye centre (-0.24, 0.10, 0.52)) that
+        # direction resolved to a surface point 0.226 world units from the
+        # eye centre while the eye's own radius is 0.17 - a white smear on
+        # the forehead, unattached to either eye.
+        #
+        # Fixed by building an actual 3D point on the eye's own surface
+        # (the same up-left nudge `off`, still in the eye's local frame,
+        # placed at radius r from `c`) and turning THAT into a direction
+        # from head_center - the frame spots() actually measures in.
+        # Re-derived for the demo's left eye: the reconstructed hit point
+        # (head_center + direction * |c - head_center|) now lands 0.048
+        # from the eye centre, inside its 0.17 radius.
         off = np.array([-0.35, 0.35, 0.0])
-        gd = d + off
-        decals.append((tuple(gd / (np.linalg.norm(gd) + 1e-9)),
-                       math.degrees(glint*8), 0.7, glint_color))
+        local = d + off
+        local = local / (np.linalg.norm(local) + 1e-9)
+        point = c + local * r
+        hc = np.array(head_center, float)
+        gd = point - hc
+        dist = np.linalg.norm(gd) + 1e-9
+        gd = gd / dist
+        # Angular radius of the glint as seen from head_center, not from the
+        # eye itself: a fixed physical radius subtends a smaller angle the
+        # farther it sits from the point spots() measures angles from.
+        rad_deg = math.degrees(math.asin(min(glint / dist, 1.0)))
+        decals.append((tuple(gd), rad_deg, 0.7, glint_color))
     return Eye(socket, parts, decals)
 
 

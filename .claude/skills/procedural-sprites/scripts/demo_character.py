@@ -21,14 +21,22 @@ ANGRY = FACE | dict(brow=16.0, eye_open=0.7, mouth=-0.22)
 BODY = (200, 120, 90)
 INK = (26, 26, 46)
 
+HEAD_CENTRE = (0.0, 0.10, 0.0)      # every decal aims at this
+
 
 def build(expr):
     """Returns (shape, surface, decals) for one expression."""
     head = sphere(0.62)
     r = 0.17 * expr["eye_open"]
     look = (expr["pupil_x"], 0.05, 1.0)
-    left = eye((-0.24, 0.10, 0.52), look, r=r, iris=r*0.5, pupil=r*0.25)
-    right = eye((0.24, 0.10, 0.52), look, r=r, iris=r*0.5, pupil=r*0.25)
+    # head_center=HEAD_CENTRE so each eye's glint direction is built from
+    # the same global centre spots() paints against below, not the origin
+    # eye() defaults to - see eye()'s own docstring for why that distinction
+    # matters (a glint that lands on the forehead otherwise).
+    left = eye((-0.24, 0.10, 0.52), look, r=r, iris=r*0.5, pupil=r*0.25,
+              head_center=HEAD_CENTRE)
+    right = eye((0.24, 0.10, 0.52), look, r=r, iris=r*0.5, pupil=r*0.25,
+               head_center=HEAD_CENTRE)
 
     shape = union(smooth_union(0.06, head, left.socket, right.socket),
                   *[s for s, _ in left.parts + right.parts])
@@ -44,9 +52,6 @@ def build(expr):
                   radius_deg=3.4, color=INK, samples=8)
     decals = mouth + brow + mirror_decals(brow) + left.decals + right.decals
     return shape, surf, decals
-
-
-HEAD_CENTRE = (0.0, 0.10, 0.0)      # every decal aims at this
 
 
 def _painted(expr):

@@ -141,6 +141,43 @@ def test_a_glint_is_a_decal_not_geometry():
     assert len(e.parts) == 3            # sclera, iris, pupil
 
 
+def test_the_glint_lands_on_the_eye_not_the_forehead():
+    """spots() measures every decal's angle from ONE GLOBAL centre (the
+    `center` a caller passes it, typically the whole head) - the glint's
+    direction has to be built from that same point, not from the eye's own
+    local `look` frame.
+
+    Setting the glint's radius/softness to zero (the only prior coverage,
+    `len(e.decals) == 1`) leaves this passing no matter which direction the
+    glint points - it says nothing about WHERE the decal lands. This
+    reconstructs the actual surface point spots() would paint: a decal
+    direction only encodes an ANGLE from its centre, so the point at that
+    angle, at the same distance as the eye centre from head_center, is
+    where a ray near the eye actually resolves to.
+
+    Measured for the demo's own left eye (head_center (0, 0.10, 0), eye
+    centre (-0.24, 0.10, 0.52), r=0.17) before this fix: 0.226 world units
+    from the eye centre - outside the eye's own 0.17 radius, i.e. a white
+    smear landing on the forehead instead of either eye.
+    """
+    head_center = np.array([0.0, 0.10, 0.0])
+    eye_center = np.array([-0.24, 0.10, 0.52])
+    r = 0.17
+    e = eye(tuple(eye_center), (0.0, 0.05, 1.0), r=r, iris=r*0.5,
+           pupil=r*0.25, head_center=tuple(head_center))
+    assert len(e.decals) == 1
+    gdir, rad_deg, soft, color = e.decals[0]
+    gdir = np.array(gdir)
+    assert abs(np.linalg.norm(gdir) - 1.0) < 1e-6, "direction must be unit"
+
+    dist = np.linalg.norm(eye_center - head_center)
+    point = head_center + gdir * dist
+    assert np.linalg.norm(point - eye_center) < r, (
+        "the glint must resolve to a point within the eye's own radius of "
+        "its centre, not drift off onto the forehead",
+        np.linalg.norm(point - eye_center), r)
+
+
 def test_zeroed_parameters_give_a_plain_dot_eye():
     """The library must not insist on a cartoon eye — a dot is a legitimate
     style and comes from the same call."""
