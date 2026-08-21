@@ -1,0 +1,22 @@
+{
+  "name": "sprite-generator",
+  "displayName": "Sprite Generator",
+  "description": "Turn a screenshot, a set of reference images, or plain words into game sprites — no image-generation API anywhere: a brief is measured from the input, then the sprite is either drawn by Python (Pillow + numpy) or hand-generated and cut out locally.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Fatih Bulut",
+    "url": "https://github.com/masa2146"
+  },
+  "repository": "https://github.com/masa2146/sprite-generator",
+  "license": "MIT",
+  "keywords": [
+    "sprites",
+    "game-assets",
+    "procedural-generation",
+    "pillow",
+    "image-style",
+    "tilesets",
+    "pixel-art"
+  ],
+  "skills": "./.claude/skills"
+}

@@ -1,0 +1,15 @@
+{
+  "name": "sprite-generator",
+  "description": "Sprite pipeline skills: brief a screenshot or description into measured references, then draw sprites procedurally in Python or cut hand-generated ones.",
+  "owner": {
+    "name": "Fatih Bulut",
+    "url": "https://github.com/masa2146"
+  },
+  "plugins": [
+    {
+      "name": "sprite-generator",
+      "source": "./",
+      "description": "Screenshot / reference images / plain words \u2192 cropped refs + analysis.json + review.html, then sprites drawn procedurally in Python or hand-generated and cut locally."
+    }
+  ]
+}
